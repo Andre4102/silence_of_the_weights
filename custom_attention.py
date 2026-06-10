@@ -871,6 +871,11 @@ class Attention(torch.nn.Module):
         self.proj = torch.nn.Linear(self.v_out_dim, self.embed_dim)
         self.proj_drop = torch.nn.Dropout(proj_drop)
 
+    def get_attn_shapes(self):
+        # (embed_dim, num_heads, (qk_head_dim, vo_head_dim)) — used by LoRAWrapper
+        # to split the packed qkv projection. Q and K share head_dim by construction.
+        return self.embed_dim, self.num_heads_q, (self.head_dim_q, self.head_dim_v)
+
     def forward(self, x, key=None, value=None):
         B, N, C = x.shape #batch, num_token, embed_dim
         qkv = self.qkv(x).reshape(B, N, (self.q_out_dim+self.k_out_dim+self.v_out_dim))
