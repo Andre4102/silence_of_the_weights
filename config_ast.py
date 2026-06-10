@@ -26,7 +26,7 @@ dataset_config={
     'speechcommands':{
         'dataset_name': 'speechcommands',
         'data_root' : f'/leonardo_scratch/large/userexternal/adiecidu/pruning/data/speechcommands/',
-        'model_path' : '/leonardo_scratch/large/userexternal/adiecidu/pruning/results/ast/speechcommands/models/best_model.pth',
+        'model_path' : '/leonardo_scratch/large/userexternal/adiecidu/pruning/results/ast/speechcommands/basemodel/best_model.pth',
         'imagenet_pretrain':False,
         'audioset_pretrain':False,
         'bal':None,
@@ -64,7 +64,7 @@ dataset_config={
     'audioset':{
         'dataset_name':'audioset',
         'data_root' : f'/leonardo_scratch/large/userexternal/adiecidu/pruning/data/ast_format',
-        'model_path' : '/leonardo_scratch/large/userexternal/adiecidu/pruning/results/ast/audioset/models/best_model.pth',
+        'model_path' : '/leonardo_scratch/large/userexternal/adiecidu/pruning/results/ast/audioset/basemodel/best_model.pth',
         'imagenet_pretrain':False,
         'audioset_pretrain':False,
         'freqm':48,
