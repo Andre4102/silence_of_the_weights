@@ -144,7 +144,11 @@ def prepare_audioset():
             valid_mids.add(row["mid"])
     print(f"[as] {len(valid_mids)} classes in {label_csv}")
 
+    # decode=False so `datasets` does NOT invoke torchcodec; read with soundfile
+    from datasets import Audio
     ds = load_dataset("agkphysics/AudioSet", "balanced")
+    ds = ds.cast_column("audio", Audio(decode=False))
+
     split_out = {"train": dc["tr_data"], "test": dc["eval_data"]}
     for split, out_name in split_out.items():
         entries = []
@@ -152,10 +156,22 @@ def prepare_audioset():
             mids = [m for m in ex["labels"] if m in valid_mids]
             if not mids:
                 continue
-            arr = ex["audio"]["array"]
-            sr = ex["audio"]["sampling_rate"]
+            au = ex["audio"]
             wav_path = audio_dir / f"{ex['video_id']}.wav"
             if not wav_path.exists():
+                if au.get("path") and os.path.exists(au["path"]):
+                    arr, sr = sf.read(au["path"])
+                else:
+                    import io
+                    arr, sr = sf.read(io.BytesIO(au["bytes"]))
+                # AST expects 16 kHz mono (matches config mean/std)
+                if getattr(arr, "ndim", 1) == 2:
+                    arr = arr.mean(axis=1)
+                if sr != 16000:
+                    import librosa
+                    arr = librosa.resample(arr.astype("float32"),
+                                           orig_sr=sr, target_sr=16000)
+                    sr = 16000
                 sf.write(str(wav_path), arr, sr)
             entries.append({"wav": str(wav_path.resolve()), "labels": ",".join(mids)})
         out = root / out_name
