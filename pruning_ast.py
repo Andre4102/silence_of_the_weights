@@ -44,7 +44,7 @@ from ast_utils import train, validate, ASTModel, AudiosetDataset
 timm.models.vision_transformer.Attention = Attention
 timm.models.vision_transformer.Block = Block
 
-def prune_attention(pruning_strategy, threshold_strategy, importance_strategy, dataset, num_epochs, lr, opti, result_dir):
+def prune_attention(pruning_strategy, threshold_strategy, importance_strategy, dataset, num_epochs, lr, opti, result_dir, num_iterations=None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     dataset_config = config.dataset_config[dataset]
     # output_dir = os.path.join(config.output_dir, dataset_config['dataset_name'])
@@ -61,7 +61,7 @@ def prune_attention(pruning_strategy, threshold_strategy, importance_strategy, d
     set_seed(seed)
     
     prune_amount_per_iteration = config.prune_amount_per_iteration  # Smaller for iterative effect
-    num_iterations = config.num_iterations
+    num_iterations = config.num_iterations if num_iterations is None else num_iterations
     
     audio_conf = {'num_mel_bins': 128, 'target_length': dataset_config['audio_length'], 
                       'freqm': dataset_config['freqm'], 'timem': dataset_config['timem'], 'mixup': dataset_config['mixup'], 
@@ -362,6 +362,8 @@ if __name__ == '__main__':
     parser.add_argument("--lr", default=1e-4, type=float)
     parser.add_argument("--optim", default='adam')
     parser.add_argument("--result_dir", default=config.output_dir)
+    parser.add_argument("--num_iterations", default=None, type=int,
+                        help="Override config.num_iterations (e.g. 1 for a quick smoke test)")
 
     args = parser.parse_args()
     dataset = args.dataset
@@ -372,4 +374,4 @@ if __name__ == '__main__':
     threshold_strategy = get_enum(ThresholdStrategy, args.threshold_strategy) if isinstance(args.threshold_strategy, str) else args.threshold_strategy
     importance_strategy = get_enum(ImportanceStrategy, args.importance_strategy) if isinstance(args.importance_strategy, str) else args.importance_strategy
     
-    prune_attention(pruning_strategy, threshold_strategy, importance_strategy, dataset, args.num_epochs, args.lr, args.optim, args.result_dir)
+    prune_attention(pruning_strategy, threshold_strategy, importance_strategy, dataset, args.num_epochs, args.lr, args.optim, args.result_dir, args.num_iterations)

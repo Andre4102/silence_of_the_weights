@@ -206,14 +206,14 @@ def one_epoch_train_distill(
 
     return total_loss / len(dataloader), global_step
 
-def main(pruning_strategy, threshold_strategy, importance_strategy, epochs, lr, optim_name, results_root):
+def main(pruning_strategy, threshold_strategy, importance_strategy, epochs, lr, optim_name, results_root, num_iterations=None):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
     model_name = config.MODEL_NAME
     batch_size = config.batch_size
     gradient_accumulation_steps = config.gradient_accumulation_steps
 
-    iterations = config.num_iterations
+    iterations = config.num_iterations if num_iterations is None else num_iterations
     prune_amount = config.prune_amount_per_iteration
 
     max_grad_norm = getattr(config, "max_grad_norm", 1.0)
@@ -472,6 +472,8 @@ if __name__ == "__main__":
     parser.add_argument("--lr", default=config.learning_rate, type=float)
     parser.add_argument("--optim", default='sgd')
     parser.add_argument("--results_root", default=config.results_root)
+    parser.add_argument("--num_iterations", default=None, type=int,
+                        help="Override config.num_iterations (e.g. 1 for a quick smoke test)")
 
     args = parser.parse_args()
 
@@ -479,4 +481,4 @@ if __name__ == "__main__":
     pruning_strategy = get_enum(PruningStrategy, args.pruning_strategy) if isinstance(args.pruning_strategy, str) else args.pruning_strategy 
     threshold_strategy = get_enum(ThresholdStrategy, args.threshold_strategy) if isinstance(args.threshold_strategy, str) else args.threshold_strategy
     importance_strategy = get_enum(ImportanceStrategy, args.importance_strategy) if isinstance(args.importance_strategy, str) else args.importance_strategy
-    main(pruning_strategy, threshold_strategy, importance_strategy, args.epochs, args.lr, args.optim, args.results_root)
+    main(pruning_strategy, threshold_strategy, importance_strategy, args.epochs, args.lr, args.optim, args.results_root, args.num_iterations)
