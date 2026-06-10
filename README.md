@@ -25,7 +25,6 @@ The experiments sweep three independent axes (see the paper, Sec. 2):
 ## Repository layout
 
 ### AST (audio classification)
-- `ast_main.py` — AST training / fine-tuning entry point.
 - `pruning_ast.py` — iterative attention-block pruning loop for AST.
 - `ast_utils.py` — AST model + dataset (Audioset, SpeechCommands) helpers.
 - `config_ast.py` — AST run configuration.
@@ -37,16 +36,14 @@ The experiments sweep three independent axes (see the paper, Sec. 2):
 - `whisper_utils.py` — dataset loading and Whisper helpers.
 - `config_whisper.py` — Whisper run configuration.
 
-### Pruning core (shared)
-- `structured_pruning_utils_fisher.py`,
-  `structured_pruning_utils_fisher_rope.py` — Fisher-scored channel/head
-  budget allocation and masking.
-- `pruning_utils2.py` — pruning helpers shared across architectures.
-- `custom_attention.py` — layer-wise prunable attention modules.
+### Pruning core
+- `structured_pruning_utils_fisher_rope.py` — Fisher-scored channel/head
+  budget allocation and masking (used by both AST and Whisper pruning).
+- `pruning_utils2.py` — magnitude-based pruning helpers.
+- `custom_attention.py` — layer-wise prunable attention modules (AST + Whisper).
 - `tf_locoformer.py` — module imported by the pruning utils (dependency).
 - `lora.py` — LoRA fine-tuning wrapper used between pruning iterations.
 - `utils.py` — common helpers (seeding, logging, ...).
-- `ragged_attn/` — Triton ragged-attention kernel used by `custom_attention`.
 
 ### Analysis / figures
 - `compute_sparsity.py` — per-layer attention sparsity (Fig. 3).
