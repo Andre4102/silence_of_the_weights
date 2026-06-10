@@ -1,0 +1,25 @@
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+build/
+dist/
+
+# experiment outputs
+results/
+logs/
+*tensorboard*/
+*.log
+*.out
+*.err
+
+# data / checkpoints
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+data/
+checkpoints/
+
+.DS_Store
+.ipynb_checkpoints/
