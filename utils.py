@@ -1,447 +1,576 @@
 import os
-import gc
 import io
-import time
-import math
 import random
-import time
-import datetime
-import psutil
 import numpy as np
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
-import torch.distributed as dist
-from torch.optim.lr_scheduler import LambdaLR
-from torch.utils.tensorboard import SummaryWriter
+from typing import Tuple, List
+from tqdm import tqdm
 import matplotlib.pyplot as plt
 import seaborn as sns
-import json
-import argparse
+import psutil
+import pynvml
+import threading
+import time
+import os
+import gc
 from fvcore.nn import FlopCountAnalysis
-from fvcore.nn.jit_handles import get_shape
+from fvcore.nn.jit_handles import elementwise_flop_counter
+import math
+from torch.optim.lr_scheduler import LambdaLR
+from fvcore.nn.jit_handles import elementwise_flop_counter, get_shape
+import numpy as np
+import argparse
 
-try:
-    pass # bypassed pynvml to prevent AMD crash
-except ImportError:
-    pass
+from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+from custom_attention import (MultiheadAttention, Attention, WhisperAttention, LayerWiseWhisperConfig)
+import tf_locoformer
 
-IS_ROCM: bool = torch.version.hip is not None
-# On both CUDA and ROCm, PyTorch surfaces GPUs through the torch.cuda namespace,
-# so "cuda" is the correct device/autocast string in both cases.
-ACCELERATOR: str = "cuda" if torch.cuda.is_available() else "cpu"
+ATTENTION_CLASSES = (
+    MultiheadAttention,
+    WhisperAttention,
+    Attention,
+    tf_locoformer.MultiHeadSelfAttention,
+)
 
-def init_distributed():
-    # ── Detect launcher ──────────────────────────────────────────────────────
-    # torchrun sets RANK/LOCAL_RANK/WORLD_SIZE before spawning each process.
-    # SLURM srun sets SLURM_PROCID/SLURM_LOCALID/SLURM_NTASKS instead.
-    # If neither is present we are running single-process with no distributed
-    # context (e.g. a quick debug run), so bail out early.
+def update_config_from_model(model, config):
+    """
+    Update LayerwiseBertConfig based on the actual pruned model structure.
+    This assumes the model has encoder.layer[i].attention.self.{query,key,value}
+    and intermediate/dense layers like Hugging Face BertModel.
+    """
 
-    torchrun_active = "RANK" in os.environ and "WORLD_SIZE" in os.environ
-    slurm_active    = "SLURM_PROCID" in os.environ
+    if isinstance(config, LayerWiseWhisperConfig):
+        num_layers = len(config.encoder_self_qkv_config)+len(config.decoder_self_qkv_config)
 
-    if not torchrun_active and not slurm_active:
-        return 0, 1, 0   # single-process, no dist
+    # Hidden size = output dim of embeddings / encoder outputs
+    config.hidden_size = model.config.hidden_size
+    
+    for i in range(num_layers):
+        if isinstance(config, LayerWiseWhisperConfig):
+            if i < len(config.encoder_self_qkv_config):
+                self_attn = model.model.encoder.layers[i].self_attn
+                hidden_size = self_attn.embed_dim
+                # query
+                q_heads = self_attn.num_heads_q
+                q_dim = self_attn.head_dim_q
 
-    if torchrun_active:
-        # torchrun already wrote RANK / LOCAL_RANK / WORLD_SIZE into the env.
-        rank       = int(os.environ["RANK"])
-        local_rank = int(os.environ["LOCAL_RANK"])
-        world_size = int(os.environ["WORLD_SIZE"])
-    else:
-        # SLURM srun path: populate the env vars that dist.init_process_group
-        # expects when init_method="env://".
-        rank = int(os.environ.get("SLURM_PROCID", 0))
-        local_rank = int(os.environ.get("SLURM_LOCALID", 0))
-        world_size = int(os.environ.get("SLURM_NTASKS", 1))
-        os.environ["RANK"]       = str(rank)
-        os.environ["LOCAL_RANK"] = str(local_rank)
-        os.environ["WORLD_SIZE"] = str(world_size)
+                # value
+                v_heads = self_attn.num_heads_v
+                v_dim = self_attn.head_dim_v
+                config.encoder_self_qkv_config[i] = {
+                    "hidden_size": hidden_size,
+                    "num_attention_heads": q_heads,
+                    "num_attention_heads_v": v_heads,
+                    "head_dim": q_dim,
+                    "head_dim_v": v_dim,
+                    "attention_dropout": self_attn.dropout,
+                }
+            else:
+                idx = i - len(config.encoder_self_qkv_config)
+                self_attn = model.model.decoder.layers[idx].self_attn
+                hidden_size = self_attn.embed_dim
+                # query
+                q_heads = self_attn.num_heads_q
+                q_dim = self_attn.head_dim_q
 
-    # ── Device assignment for this process ───────────────────────────────────
-    # Each process uses local_rank as its device index (rank 0 -> cuda:0, etc).
-    # Every process MUST see ALL GPUs (CUDA: device_count() == ntasks-per-node;
-    # ROCm: all visible GCDs) so that local_rank correctly identifies each
-    # process's device. Do NOT restrict CUDA_VISIBLE_DEVICES / ROCR_VISIBLE_DEVICES
-    # and do NOT pass --gpu-bind in the SLURM script: binding renumbers each
-    # task's GPU to index 0, so set_device(local_rank) for local_rank > 0 then
-    # lands on an invalid device and NCCL segfaults during init_process_group.
-    # Device pinning is owned entirely by torch.cuda.set_device(local_rank) below.
+                # value
+                v_heads = self_attn.num_heads_v
+                v_dim = self_attn.head_dim_v
 
-    # ── Validate ─────────────────────────────────────────────────────────────
-    n_visible = torch.cuda.device_count()
-    if n_visible == 0:
-        raise RuntimeError(
-            "torch.cuda.device_count()==0. "
-            "Check your ROCm/CUDA installation and GPU allocation."
-        )
-    if local_rank >= n_visible:
-        raise RuntimeError(
-            f"local_rank={local_rank} but torch.cuda.device_count()={n_visible}. "
-            f"Check {'ROCR_VISIBLE_DEVICES' if IS_ROCM else 'CUDA_VISIBLE_DEVICES'}="
-            f"{os.environ.get('ROCR_VISIBLE_DEVICES' if IS_ROCM else 'CUDA_VISIBLE_DEVICES', 'unset')}."
-        )
+                config.decoder_self_qkv_config[idx] = {
+                    "hidden_size": hidden_size,
+                    "num_attention_heads": q_heads,
+                    "num_attention_heads_v": v_heads,
+                    "head_dim": q_dim,
+                    "head_dim_v": v_dim,
+                    "attention_dropout": self_attn.dropout,
+                }
 
-    # ── Initialise process group ──────────────────────────────────────────────
-    # rccl is AMD's NCCL equivalent and is the correct backend for ROCm.
-    # Fall back to nccl for CUDA, or if rccl is somehow not registered.
-    if IS_ROCM:
-        backend = "rccl" if "rccl" in torch.distributed.Backend.default_device_backend_map else "nccl"
-    else:
-        backend = "nccl"
+                cross_attn = model.model.decoder.layers[idx].encoder_attn
+                hidden_size = cross_attn.embed_dim
+                # query
+                q_heads = cross_attn.num_heads_q
+                q_dim = cross_attn.head_dim_q
 
-    torch.cuda.set_device(local_rank)
-    device = torch.device(f"cuda:{local_rank}")
-    dist.init_process_group(
-        backend=backend,
-        init_method="env://",
-        timeout=datetime.timedelta(hours=2),
-    )
-    return rank, world_size, local_rank
+                # value
+                v_heads = cross_attn.num_heads_v
+                v_dim = cross_attn.head_dim_v
 
-
-def is_main(rank: int) -> bool: return rank == 0
-def barrier(world_size: int):
-    if world_size > 1: dist.barrier()
-def cleanup_distributed(world_size: int):
-    if world_size > 1 and dist.is_initialized(): dist.destroy_process_group()
-
-def log_vram(tag: str, rank: int, local_rank: int):
-    """Safely logs VRAM/HBM usage across all processes without synchronization hangs."""
-    if not torch.cuda.is_available(): return
-    allocated = torch.cuda.memory_allocated(local_rank) / (1024 ** 3)
-    reserved  = torch.cuda.memory_reserved(local_rank)  / (1024 ** 3)
-    label = "HBM" if IS_ROCM else "VRAM"
-    if is_main(rank):
-        print(f"  [{label}] {tag:.<35} Allocated: {allocated:>5.2f} GB | Reserved: {reserved:>5.2f} GB")
+                config.decoder_cross_qkv_config[idx] = {
+                    "hidden_size": hidden_size,
+                    "num_attention_heads": q_heads,
+                    "num_attention_heads_v": v_heads,
+                    "head_dim": q_dim,
+                    "head_dim_v": v_dim,
+                    "attention_dropout": self_attn.dropout,
+                }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Model Interface Helpers & Sparsity Tracking
-# ─────────────────────────────────────────────────────────────────────────────
+    model.config = config
+    return config
 
 def count_parameters(model):
+    """Count the number of trainable parameters in the model."""
     return sum(p.numel() for p in model.parameters())
 
-# ============================================================================
-# General Sparsity Tracking Utilities
-# ============================================================================
+def build_layer_index(model):
+    index = []
+    for name, module in model.named_modules():
+        if is_encoder_layer(module):
+            index.append(name)
+    return index
 
-def capture_original_params(model, get_layers_fn=lambda m: m.model.layers, get_blocks_fn=lambda layer: (layer.self_attn, layer.mlp)):
-    """Captures the parameter count per layer to calculate accurate sparsity later."""
-    original_config = {}
-    for i, layer in enumerate(get_layers_fn(model)):
-        sa, mlp = get_blocks_fn(layer)
+def get_layer_by_name(model, name):
+    cur = model
+    for attr in name.split("."):
+        cur = getattr(cur, attr)
+    return cur
+
+def get_model_layers(model):
+    """Extract encoder layers from model."""
+    layers = []
+    if isinstance(model, torch.nn.DataParallel):
+        base_model = model.module
+    else:
+        base_model = model
         
-        attn_params = 0
-        if hasattr(sa, "get_attn_weights"):
-            attn_ws, o_w, _, _ = sa.get_attn_weights()
-            attn_params += o_w.numel() + (sum(w.numel() for w in attn_ws) if isinstance(attn_ws, list) else attn_ws.numel())
-            
-        mlp_params = 0
-        if hasattr(mlp, "get_mlp_weights"):
-            mlp_ws, _, down_w, _ = mlp.get_mlp_weights()
-            mlp_params += down_w.numel() + (sum(w.numel() for w in mlp_ws) if isinstance(mlp_ws, list) else mlp_ws.numel())
-            
-        original_config[i] = {
-            "attn_params": attn_params,
-            "mlp_params": mlp_params
-        }
-    return original_config
-
-def get_model_sparsity(model, original_config=None, get_layers_fn=lambda m: m.model.layers, get_blocks_fn=lambda layer: (layer.self_attn, layer.mlp)):
-    """
-    Calculates true sparsity by comparing current parameter count against the captured baseline.
-    Returns: A dictionary with overall sparsity stats and layer-wise sparsity stats.
-    """
-    layers_stats =[]
-    overall_base = 0
-    overall_curr = 0
+    for i, name in enumerate(base_model._encoder_layer_names):
+        layer = get_layer_by_name(model, name)
+        layers.append(layer)
     
-    for i, layer in enumerate(get_layers_fn(model)):
-        sa, mlp = get_blocks_fn(layer)
-        
-        curr_attn_params = 0
-        if hasattr(sa, "get_attn_weights"):
-            attn_ws, o_w, _, _ = sa.get_attn_weights()
-            curr_attn_params += o_w.numel() + (sum(w.numel() for w in attn_ws) if isinstance(attn_ws, list) else attn_ws.numel())
-            
-        curr_mlp_params = 0
-        if hasattr(mlp, "get_mlp_weights"):
-            mlp_ws, _, down_w, _ = mlp.get_mlp_weights()
-            curr_mlp_params += down_w.numel() + (sum(w.numel() for w in mlp_ws) if isinstance(mlp_ws, list) else mlp_ws.numel())
-            
-        curr_total = curr_attn_params + curr_mlp_params
-        
-        base_attn_params = original_config[i]["attn_params"] if original_config and i in original_config else curr_attn_params
-        base_mlp_params = original_config[i]["mlp_params"] if original_config and i in original_config else curr_mlp_params
-        base_total = base_attn_params + base_mlp_params
-        
-        sparsity = 1.0 - (curr_total / base_total) if base_total > 0 else 0.0
-        attn_sparsity = 1.0 - (curr_attn_params / base_attn_params) if base_attn_params > 0 else 0.0
-        mlp_sparsity = 1.0 - (curr_mlp_params / base_mlp_params) if base_mlp_params > 0 else 0.0
-        
-        layers_stats.append({
-            "layer": i,
-            "sparsity": sparsity,
-            "attn_sparsity": attn_sparsity,
-            "mlp_sparsity": mlp_sparsity,
-            "curr_params": curr_total,
-            "base_params": base_total
-        })
-        
-        overall_base += base_total
-        overall_curr += curr_total
-        
-    overall_sparsity = 1.0 - (overall_curr / overall_base) if overall_base > 0 else 0.0
+    return layers
+
+def get_layers(model):
+    attn_layers = []
+
+    for name in model._encoder_layer_names:
+        layer = get_layer_by_name(model, name)
+        matches = []
+
+        for _, module in layer.named_modules():
+            if isinstance(module, ATTENTION_CLASSES):
+                matches.append(module)
+
+        if len(matches) == 0:
+            raise RuntimeError(
+                f"No attention module found in encoder layer {layer.__class__.__name__}"
+            )
+
+        if len(matches) > 2:
+            raise RuntimeError(
+                f"Too many attention modules found in encoder layer {layer.__class__.__name__}"
+            )
+
+        attn_layers.append(matches[0])  
+
+    return attn_layers
+
+
+def capture_encoder_layer_names(model):
+    if isinstance(model, torch.nn.DataParallel):
+        base_model = model.module
+    else:
+        base_model = model
+
+    names = []
+    for name, module in base_model.named_modules():
+        # print(name)
+        if is_encoder_layer(module):
+            names.append(name)
+
+    # preserve semantic order
+    names.sort(key=lambda x: (x.count("."), x))
+    return names
+
+def _contains_linear(module):
+    if isinstance(module, nn.Linear):
+        return True
+    return any(_contains_linear(child) for child in module.children())
+
+def _is_norm_layer(module):
+    NORM_TYPES = (
+        nn.LayerNorm, nn.BatchNorm1d, nn.BatchNorm2d,
+        nn.BatchNorm3d, nn.GroupNorm, nn.InstanceNorm1d,
+        nn.InstanceNorm2d, nn.InstanceNorm3d,
+    )
+    if isinstance(module, NORM_TYPES):
+        return True
+    # Catch RMSNorm, LlamaRMSNorm, T5LayerNorm, etc. by name
+    return 'norm' in type(module).__name__.lower()
+
+def is_encoder_layer(module):
+    # print(module)
+    # Don't match attention modules themselves
+    if isinstance(module, ATTENTION_CLASSES):
+        # print('attention class, not encoder layer')
+        return False
+
+    # Count attention modules at shallow depth (direct children or one level down)
+    # to avoid counting all attentions in the entire stack
+    attention_count = 0
+    for child in module.children():
+        if isinstance(child, ATTENTION_CLASSES):
+            attention_count += 1
+        # else:
+        #     # one level deeper to handle wrappers like BertAttention -> BertSelfAttention
+        #     for grandchild in child.children():
+        #         if isinstance(grandchild, ATTENTION_CLASSES):
+        #             attention_count += 1
+
+    # Encoder layer: exactly 1 self-attention
+    # Decoder layer: exactly 2 (self-attention + cross-attention)
+    if attention_count not in (1, 2):
+        # print('too many or too few attention classes', attention_count)
+        return False
+
+    # Must have a direct MLP/FFN child
+    has_ffn = any(
+        not isinstance(child, ATTENTION_CLASSES)
+        and not _is_norm_layer(child)
+        and not isinstance(child, nn.Dropout)
+        and _contains_linear(child)
+        for child in module.children()
+    )
+    # print('FFN', has_ffn)
+    return has_ffn
+
+
+def get_layer_weights_fisher(sa):
+    #EXTRACT MODULE WEIGHTS for fisher information
     
-    return {
-        "overall": {
-            "sparsity": overall_sparsity,
-            "curr_params": overall_curr,
-            "base_params": overall_base
-        },
-        "layers": layers_stats
-    }
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# TensorBoard Logging (Heatmaps & Sparsity)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def init_index_mapping(model, get_layers_fn, get_blocks_fn):
-    """Creates the baseline index mapping for Iteration 0.
- 
-    Each layer entry holds, in ORIGINAL index space:
-        heads:            list of surviving original head indices
-        qk, vo:           dict[orig_h] -> list of surviving original channel indices
-        mlp:              list of surviving original MLP neuron indices
-        orig_num_heads, orig_hd_qk, orig_hd_vo, orig_hidden_dim: dimensions of
-                          the un-pruned model (unchanged across iterations).
-    """
-    mapping = {}
-    for i, layer in enumerate(get_layers_fn(model)):
-        sa, mlp = get_blocks_fn(layer)
-        entry = {}
- 
-        if hasattr(sa, "get_attn_shapes"):
-            _, num_heads, head_dims = sa.get_attn_shapes()
-            hd_qk, hd_vo = head_dims
-            entry.update({
-                "heads": list(range(num_heads)),
-                "qk": {h: list(range(hd_qk)) for h in range(num_heads)},
-                "vo": {h: list(range(hd_vo)) for h in range(num_heads)},
-                "orig_num_heads": num_heads,
-                "orig_hd_qk": hd_qk,
-                "orig_hd_vo": hd_vo,
-            })
- 
-        if hasattr(mlp, "get_mlp_shapes"):
-            _, hidden_dim, _ = mlp.get_mlp_shapes()
-            entry.update({
-                "mlp": list(range(hidden_dim)),
-                "orig_hidden_dim": hidden_dim,
-            })
- 
-        mapping[i] = entry
-    return mapping
- 
- 
-def update_index_mapping(mapping, plans):
-    """Updates the mapping using the structural plan from the pruner.
- 
-    `plans[i]['attn']` and `plans[i]['mlp']` contain indices in the CURRENT
-    (already-pruned) model's coordinate system. This function remaps them
-    back to the ORIGINAL coordinate system so the mapping always tracks
-    which original units have survived.
-    """
-    for i, plan in plans.items():
- 
-        # --- Attention: unchanged logic ---
-        if 'attn' in plan:
-            kept_heads, kept_channels_qk, kept_channels_vo = plan['attn']
- 
-            # kept_heads: indices into the CURRENT surviving head list
-            new_heads = [mapping[i]["heads"][h] for h in kept_heads]
- 
-            new_qk, new_vo = {}, {}
-            for current_h in kept_heads:
-                orig_h = mapping[i]["heads"][current_h]
-                # kept_channels_*[current_h]: indices into the CURRENT surviving
-                # channel list for that head
-                new_qk[orig_h] = [mapping[i]["qk"][orig_h][c]
-                                  for c in kept_channels_qk[current_h]]
-                new_vo[orig_h] = [mapping[i]["vo"][orig_h][c]
-                                  for c in kept_channels_vo[current_h]]
- 
-            mapping[i]["heads"] = new_heads
-            mapping[i]["qk"] = new_qk
-            mapping[i]["vo"] = new_vo
- 
-        # --- MLP: new tracking ---
-        if 'mlp' in plan and "mlp" in mapping[i]:
-            kept_neurons = plan['mlp']  # indices into CURRENT surviving neuron list
-            mapping[i]["mlp"] = [mapping[i]["mlp"][n] for n in kept_neurons]
- 
-    return mapping
-
-def save_mapping(mapping, path):
-    with open(path, 'w') as f: json.dump(mapping, f)
-
-def load_mapping(path):
-    with open(path, 'r') as f: raw = json.load(f)
-    mapping = {}
-    for layer_k, layer_v in raw.items():
-        l_idx = int(layer_k)
-        mapping[l_idx] = {
-            "heads": layer_v["heads"],
-            "qk": {int(k): v for k, v in layer_v["qk"].items()},
-            "vo": {int(k): v for k, v in layer_v["vo"].items()},
-            "orig_num_heads": layer_v["orig_num_heads"],
-            "orig_hd_qk": layer_v["orig_hd_qk"],
-            "orig_hd_vo": layer_v["orig_hd_vo"]
-        }
-    return mapping
-
-def log_structural_shapes(writer: SummaryWriter, model, iteration: int, get_layers_fn, get_blocks_fn):
-    """Logs the exact number of heads, channels, and neurons per layer to TensorBoard."""
+    if isinstance(sa, (MultiheadAttention)):
+        in_weight = sa.in_proj_weight.weight
+        out_weight = sa.out_proj.weight
+    elif isinstance(sa, (tf_locoformer.MultiHeadSelfAttention)):
+        in_weight = sa.qkv.weight
+        out_weight = sa.aggregate_heads[0].weight
+    elif isinstance(sa, (Attention)):
+        in_weight = sa.qkv.weight
+        out_weight = sa.proj.weight
+    elif isinstance(sa, WhisperAttention):
+        q_weight = sa.q_proj.weight
+        k_weight = sa.k_proj.weight
+        v_weight = sa.v_proj.weight
+        in_weight = [q_weight, k_weight, v_weight]
+        out_weight = sa.out_proj.weight
+    else:
+        print("Error, wrong type of attention module!")
+        exit(-1)
     
-    if writer is None:
-        return
+    return in_weight, out_weight 
 
-    for i, layer in enumerate(get_layers_fn(model)):
-        sa, mlp = get_blocks_fn(layer)
+def get_layer_weights(sa, need_grad=False):
+    #EXTRACT MODULE WEIGHTS
+    in_bias = None
+    out_bias = None
+    
+    if isinstance(sa, (MultiheadAttention)):
+        in_weight = sa.in_proj_weight.weight
+        out_weight = sa.out_proj.weight
+        if sa.in_proj_weight.bias is not None:
+            in_bias = sa.in_proj_weight.bias
+        if sa.out_proj.bias is not None:
+            out_bias = sa.out_proj.bias
+        embed_dim = sa.embed_dim
+    elif isinstance(sa, (tf_locoformer.MultiHeadSelfAttention)):
+        in_weight = sa.qkv.weight
+        out_weight = sa.aggregate_heads[0].weight
+        if sa.qkv.bias is not None:
+            in_bias = sa.qkv.bias 
+        if sa.aggregate_heads[0].bias is not None:
+            out_bias = sa.aggregate_heads[0].bias
+        embed_dim = sa.embed_dim
+    elif isinstance(sa, (Attention)):
+        in_weight = sa.qkv.weight
+        out_weight = sa.proj.weight
+        if sa.qkv.bias is not None:
+            in_bias = sa.qkv.bias 
+        if sa.proj.bias is not None:
+            out_bias = sa.proj.bias
+        embed_dim = sa.embed_dim
+    elif isinstance(sa, WhisperAttention):
+        q_weight = sa.q_proj.weight
+        q_bias = sa.q_proj.bias
+        k_weight = sa.k_proj.weight
+        k_bias = sa.k_proj.bias
+        v_weight = sa.v_proj.weight
+        v_bias = sa.v_proj.bias
         
-        # 1. Log Attention Shapes
-        if hasattr(sa, "get_attn_shapes"):
-            embed_dim, num_heads, head_dims = sa.get_attn_shapes()
-            hd_qk, hd_vo = head_dims
-            
-            # Grouped under "Structure_Attn" in TensorBoard
-            writer.add_scalar(f"Structure_Attn/Layer_{i}_NumHeads", num_heads, iteration)
-            writer.add_scalar(f"Structure_Attn/Layer_{i}_HeadDim_QK", hd_qk, iteration)
-            writer.add_scalar(f"Structure_Attn/Layer_{i}_HeadDim_VO", hd_vo, iteration)
-            
-        # 2. Log MLP Shapes
-        if hasattr(mlp, "get_mlp_shapes"):
-            in_features, hidden_dim, out_features = mlp.get_mlp_shapes()
-            
-            # Grouped under "Structure_MLP" in TensorBoard
-            writer.add_scalar(f"Structure_MLP/Layer_{i}_HiddenDim", hidden_dim, iteration)
+        embed_dim = sa.embed_dim
+        
+        in_weight = torch.cat((q_weight, k_weight, v_weight), dim = 0)
+        if q_bias is not None:
+            in_bias = torch.cat((q_bias, q_bias, v_bias), dim = 0) #k_bias is false for whisper, so we just copy q_bias twice, but we do not copy it to key.bias later on
+        out_weight = sa.out_proj.weight
+        if sa.out_proj.bias is not None: 
+            out_bias = sa.out_proj.bias
+    else:
+        print("Error, wrong type of attention module!")
+        exit(-1)
+        
+    if hasattr(sa, 'num_heads_q'):
+        num_heads_q = sa.num_heads_q
+        num_heads_k = sa.num_heads_k 
+        num_heads_v = sa.num_heads_v
+        num_heads_o = sa.num_heads_out 
+        
+        head_dim_q = sa.head_dim_q
+        head_dim_k = sa.head_dim_k
+        head_dim_v = sa.head_dim_v
+        head_dim_o = sa.head_dim_out
+    
+    num_heads = [num_heads_q, num_heads_k, num_heads_v, num_heads_o]
+    head_dims = [head_dim_q, head_dim_k, head_dim_v, head_dim_o]
+    
+    return in_weight, out_weight, in_bias, out_bias, embed_dim, num_heads, head_dims 
 
 def pad_along_dim1(tensors):
     """Pad tensors along dimension 1 (columns/channels)"""
+    # Find maximum size along dim=1
     max_len = max(t.size(1) for t in tensors)
-    padded =[]
+   
+    padded = []
     for t in tensors:
         pad_len = max_len - t.size(1)
+        # Pad only along dim=1 (columns), (left, right)
         padded.append(F.pad(t, (0, pad_len)))  
     return padded
 
 def pad_along_dim0(tensors):
     """Pad tensors along dimension 0 (rows/heads)"""
+    # Find maximum size along dim=0
     max_len = max(t.size(0) for t in tensors)
-    padded =[]
+   
+    padded = []
     for t in tensors:
         pad_len = max_len - t.size(0)
+        # Pad only along dim=0 (rows), (top, bottom)
+        # F.pad format: (left, right, top, bottom, front, back, ...)
         padded.append(F.pad(t, (0, 0, 0, pad_len)))  
     return padded
 
-def log_attention_heatmaps(writer: SummaryWriter, model, iteration: int, mapping: dict, get_layers_fn, get_blocks_fn, order=2):
-    """Logs heatmaps maintaining original size, plotting pruned connections as Black."""
-    if writer is None: return
+# Logging attention weight heatmaps to TensorBoard
+def log_heatmap(writer: SummaryWriter,
+                sa: torch.nn.Module,
+                tag: str,
+                iteration: int,
+                order: int,
+                strategy_name):
     
-    for i, layer in enumerate(get_layers_fn(model)):
-        sa, _ = get_blocks_fn(layer)
-        if not hasattr(sa, "get_attn_shapes"): continue
-        
-        embed_dim, curr_num_heads, head_dims = sa.get_attn_shapes()
-        curr_hd_qk, curr_hd_vo = head_dims
-        attn_ws, _, _, _ = sa.get_attn_weights()
-        
-        if isinstance(attn_ws, list):
-            q_w = attn_ws[0].view(curr_num_heads, curr_hd_qk, embed_dim).detach().cpu()
-            k_w = attn_ws[1].view(curr_num_heads, curr_hd_qk, embed_dim).detach().cpu()
-            v_w = attn_ws[2].view(curr_num_heads, curr_hd_vo, embed_dim).detach().cpu()
-        else:
-            qk_out = curr_num_heads * curr_hd_qk
-            q_w = attn_ws[:qk_out].view(curr_num_heads, curr_hd_qk, embed_dim).detach().cpu()
-            k_w = attn_ws[qk_out:2*qk_out].view(curr_num_heads, curr_hd_qk, embed_dim).detach().cpu()
-            v_w = attn_ws[2*qk_out:].view(curr_num_heads, curr_hd_vo, embed_dim).detach().cpu()
-            
-        q_norm = torch.norm(q_w, p=order, dim=-1)
-        k_norm = torch.norm(k_w, p=order, dim=-1)
-        v_norm = torch.norm(v_w, p=order, dim=-1)
-        
-        # 1. Setup the Dense Canvas using Original Dimensions
-        orig_heads = mapping[i]["orig_num_heads"]
-        orig_qk = mapping[i]["orig_hd_qk"]
-        orig_vo = mapping[i]["orig_hd_vo"]
-        max_orig_channels = max(orig_qk, orig_vo)
-        
-        # Fill with NaN (Seaborn makes NaN transparent)
-        canvas = np.full((3 * orig_heads, max_orig_channels), np.nan)
-        
-        # 2. Map surviving weights back to their exact original coordinates
-        for curr_h_idx in range(curr_num_heads):
-            orig_h_idx = mapping[i]["heads"][curr_h_idx]
-            
-            # Place Q and K channels
-            for curr_c_idx in range(curr_hd_qk):
-                orig_c_idx = mapping[i]["qk"][orig_h_idx][curr_c_idx]
-                canvas[orig_h_idx, orig_c_idx] = q_norm[curr_h_idx, curr_c_idx]
-                canvas[orig_heads + orig_h_idx, orig_c_idx] = k_norm[curr_h_idx, curr_c_idx]
-                
-            # Place V channels
-            for curr_c_idx in range(curr_hd_vo):
-                orig_c_idx = mapping[i]["vo"][orig_h_idx][curr_c_idx]
-                canvas[2 * orig_heads + orig_h_idx, orig_c_idx] = v_norm[curr_h_idx, curr_c_idx]
-        
-        # 3. Plotting
-        labels = ([f"Q{h}" for h in range(orig_heads)] +[f"K{h}" for h in range(orig_heads)] +[f"V{h}" for h in range(orig_heads)])
-        
-        fig, ax = plt.subplots(figsize=(max(8, max_orig_channels / 8), max(6, (3 * orig_heads) / 4)))
-        
-        # Set background to black (shows through the NaN transparent cells)
-        ax.set_facecolor('black')
-        
-        sns.heatmap(canvas, cmap="viridis", ax=ax, cbar=True, yticklabels=labels)
-        ax.hlines([orig_heads, 2 * orig_heads], *ax.get_xlim(), colors="red", linestyles="dashed", linewidth=1.5)
-        
-        ax.set_xlabel("Original Channels")
-        ax.set_ylabel("Original Heads (Q, K, V)")
-        ax.set_title(f"Layer {i} Attention - Black = Pruned")
-        
-        fig.tight_layout()
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png')
-        buf.seek(0)
-        image = plt.imread(buf)
-        writer.add_image(f"Attention_Heatmaps/Layer_{i}", image, global_step=iteration, dataformats='HWC')
-        plt.close(fig)
+    weight, _, _, _, embed_dim, num_heads, head_dims= get_layer_weights(sa)
+    
+    num_heads_q, num_heads_k, num_heads_v, _ = num_heads
+    head_dim_q, head_dim_k, head_dim_v, _ = head_dims
+    
+    q_out_dim = num_heads_q * head_dim_q
+    k_out_dim = num_heads_k * head_dim_k
+    
+    q_weight = weight[:q_out_dim, :].view(num_heads_q, head_dim_q, embed_dim).detach().cpu()
+    k_weight = weight[q_out_dim:q_out_dim+k_out_dim, :].view(num_heads_k, head_dim_k, embed_dim).detach().cpu()
+    v_weight = weight[q_out_dim+k_out_dim:, :].view(num_heads_v, head_dim_v, embed_dim).detach().cpu()
+    
+    q_norm = torch.norm(q_weight, p = order, dim = -1)
+    k_norm = torch.norm(k_weight, p = order, dim = -1)
+    v_norm = torch.norm(v_weight, p = order, dim = -1)
+    
+    if strategy_name in ['MULTI_HEAD_SAME_CHANNEL', 'MULTI_HEAD_PER_HEAD']:
+        # Pad along dimension 1 (channels)
+        if not (head_dim_q == head_dim_k == head_dim_v):
+            q_norm, k_norm, v_norm = pad_along_dim1([q_norm, k_norm, v_norm])
+    elif strategy_name == 'MULTI_HEAD_ENTIRE_HEAD':
+        # Pad along dimension 0 (heads)
+        if not (num_heads_q == num_heads_k == num_heads_v):
+            q_norm, k_norm, v_norm = pad_along_dim0([q_norm, k_norm, v_norm])
+    else:
+        # Default behavior - pad along dim 1 if head dimensions differ
+        if not (head_dim_q == head_dim_k == head_dim_v):
+            q_norm, k_norm, v_norm = pad_along_dim1([q_norm, k_norm, v_norm])
+    
+   
+    matrix = torch.cat([q_norm, k_norm, v_norm], dim=0)
+    matrix = matrix.numpy() > 0
+    
+    labels = (
+        [f"Q{h}" for h in range(num_heads_q)] +
+        [f"K{h}" for h in range(num_heads_k)] +
+        [f"V{h}" for h in range(num_heads_v)]
+    )
+    
+    fig, ax = plt.subplots(figsize=(10, 6))
+    sns.heatmap(matrix, cmap="viridis", ax=ax, cbar=True, yticklabels=labels, xticklabels=[f"C{c}" for c in range(matrix.shape[1])])
+    
+    q_end = num_heads_q
+    k_end = q_end + num_heads_k
+    ax.hlines([q_end, k_end], *ax.get_xlim(), colors="red", linestyles="dashed", linewidth=1.5)
 
-def log_sparsity(writer: SummaryWriter, attention_layers_stats, iteration: int):
+    ax.set_xlabel("Channels")
+    ax.set_ylabel("Heads")
+    ax.set_title("Q / K / V Head x Channel")
+    
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png')
+    buf.seek(0)
+    image = plt.imread(buf)
+    writer.add_image(tag, image, global_step=iteration, dataformats='HWC')
+    plt.close(fig)
+
+# Logging sparsity metrics per attention layer
+def log_sparsity(writer: SummaryWriter,
+                 attention_layers_stats,
+                 iteration: int):
+    
     for i, stat in enumerate(attention_layers_stats):
         sparsity = stat['sparsity']
-        writer.add_scalar(f"Sparsity/Layer_{i}_overall", sparsity, iteration)
+        writer.add_scalar(f"Sparsity/Layer_{i}_in_proj_weight", sparsity, iteration)
 
+class SystemMonitor:
+    def __init__(self, interval=0.5):
+        self.interval = interval
+        self.monitoring = False
+        self.monitor_thread = None
+        self.metrics_data = []
+        self.start_time = None
+        self.peak_cpu_memory = 0
+        self.peak_gpu_memory = 0
+        self.total_energy = 0
+        self.power_readings = []
+        
+        # Initialize NVIDIA ML
+        try:
+            pynvml.nvmlInit()
+            self.gpu_handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+            self.gpu_available = True
+        except:
+            self.gpu_available = False
+            print("Warning: GPU monitoring not available")
+    
+    def _get_current_metrics(self):
+        """Get current system metrics"""
+        # CPU memory
+        memory = psutil.virtual_memory()
+        cpu_memory_gb = memory.used / (1024**3)
+        cpu_percent = psutil.cpu_percent(interval=None)  # Non-blocking
+        
+        # GPU metrics
+        gpu_memory_gb = 0
+        gpu_power_w = 0
+        gpu_util = 0
+        
+        if self.gpu_available:
+            try:
+                # GPU memory
+                if torch.cuda.is_available():
+                    gpu_memory_gb = torch.cuda.memory_allocated() / (1024**3)
+                
+                # GPU power
+                gpu_power_w = pynvml.nvmlDeviceGetPowerUsage(self.gpu_handle) / 1000.0
+                
+                # GPU utilization
+                utilization = pynvml.nvmlDeviceGetUtilizationRates(self.gpu_handle)
+                gpu_util = utilization.gpu
+                
+            except Exception as e:
+                print(f"GPU metrics error: {e}")
+        
+        return {
+            'timestamp': time.time(),
+            'cpu_memory_gb': cpu_memory_gb,
+            'gpu_memory_gb': gpu_memory_gb,
+            'cpu_percent': cpu_percent,
+            'gpu_power_w': gpu_power_w,
+            'gpu_util': gpu_util
+        }
+    
+    def _monitor_loop(self):
+        """Background monitoring loop"""
+        while self.monitoring:
+            try:
+                metrics = self._get_current_metrics()
+                self.metrics_data.append(metrics)
+                
+                # Update peaks
+                self.peak_cpu_memory = max(self.peak_cpu_memory, metrics['cpu_memory_gb'])
+                self.peak_gpu_memory = max(self.peak_gpu_memory, metrics['gpu_memory_gb'])
+                
+                # Store power for energy calculation
+                if metrics['gpu_power_w'] > 0:
+                    self.power_readings.append(metrics['gpu_power_w'])
+                
+            except Exception as e:
+                print(f"Monitoring error: {e}")
+            
+            time.sleep(self.interval)
+    
+    def start_monitoring(self):
+        """Start background monitoring"""
+        if self.monitoring:
+            return
+        
+        self.monitoring = True
+        self.start_time = time.time()
+        self.metrics_data = []
+        self.peak_cpu_memory = 0
+        self.peak_gpu_memory = 0
+        self.power_readings = []
+        
+        self.monitor_thread = threading.Thread(target=self._monitor_loop)
+        self.monitor_thread.daemon = True
+        self.monitor_thread.start()
+        print("Started system monitoring")
+    
+    def stop_monitoring(self):
+        """Stop monitoring and calculate final metrics"""
+        if not self.monitoring:
+            return {}
+        
+        self.monitoring = False
+        if self.monitor_thread:
+            self.monitor_thread.join(timeout=2)
+        
+        # Calculate total energy (approximation)
+        if self.power_readings:
+            avg_power = sum(self.power_readings) / len(self.power_readings)
+            duration_hours = (time.time() - self.start_time) / 3600
+            self.total_energy = avg_power * duration_hours  # Wh
+        
+        final_metrics = {
+            'duration_seconds': time.time() - self.start_time,
+            'peak_cpu_memory_gb': self.peak_cpu_memory,
+            'peak_gpu_memory_gb': self.peak_gpu_memory,
+            'total_energy_wh': self.total_energy,
+            'avg_gpu_power_w': sum(self.power_readings) / len(self.power_readings) if self.power_readings else 0,
+            'num_samples': len(self.metrics_data)
+        }
+        
+        print("Stopped system monitoring")
+        return final_metrics
 
-# ──────────────────────────────────────────────────────────────────────────
-# System Monitoring & Miscellaneous
-# ──────────────────────────────────────────────────────────────────────────
+# Integration functions for your main code
 def log_system_metrics_to_tensorboard(writer, metrics, step, prefix=""):
+    """Log system metrics to TensorBoard"""
     for key, value in metrics.items():
         if isinstance(value, (int, float)):
             writer.add_scalar(f'{prefix}{key}', value, step)
 
 def get_current_memory_usage():
+    """Get current memory usage (for immediate logging)"""
     memory = psutil.virtual_memory()
     cpu_memory_gb = memory.used / (1024**3)
+    
     gpu_memory_gb = 0
     if torch.cuda.is_available():
         gpu_memory_gb = torch.cuda.memory_allocated() / (1024**3)
-    return {'cpu_memory_gb': cpu_memory_gb, 'gpu_memory_gb': gpu_memory_gb}
     
+    return {
+        'cpu_memory_gb': cpu_memory_gb,
+        'gpu_memory_gb': gpu_memory_gb
+    }
+    
+# Set reproducibility
 def set_seed(seed: int):
     os.environ['PYTHONHASHSEED'] = str(seed)
     random.seed(seed)
@@ -449,12 +578,66 @@ def set_seed(seed: int):
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
+
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     torch.use_deterministic_algorithms(True, warn_only=True)
     torch.backends.mha.set_fastpath_enabled(False)
 
+# Compute evaluation metrics
+def metrics(preds: List[int], labels: List[int]) -> Tuple[float, float, float, float]:
+    all_preds = np.array(preds)
+    all_labels = np.array(labels)
+
+    acc = accuracy_score(all_labels, all_preds)
+    prec = precision_score(all_labels, all_preds, average='macro', zero_division=0.0)
+    rec = recall_score(all_labels, all_preds, average='macro', zero_division=0.0)
+    f1 = f1_score(all_labels, all_preds, average='macro', zero_division=0.0)
+
+    # print(f"Accuracy: {acc:.4f}")
+    # print(f"Precision: {prec:.4f}")
+    # print(f"Recall: {rec:.4f}")
+    # print(f"F1 Score: {f1:.4f}")
+    
+    return acc, prec, rec, f1
+
+# Training loop with validation
+def training(model: torch.nn.Module,
+             train_loader: DataLoader,
+             epoch: int,
+             epochs: int,
+             device: torch.device,
+             optimizer: torch.optim.Optimizer,
+             criterion,
+             warmup_scheduler = None) -> float:
+
+    total_training_loss = 0.0
+
+    model.train()
+    for batch in tqdm(train_loader, desc=f"Epoch {epoch+1} Training"):
+
+        optimizer.zero_grad()
+
+        batch = {
+            k: v.to(device, non_blocking=True) if torch.is_tensor(v) else v
+            for k, v in batch.items()
+        }
+        outputs = model(batch['pixel_values'])
+        loss = criterion(outputs, batch['labels'])
+        
+        loss.backward()
+
+        optimizer.step()
+        if warmup_scheduler is not None:
+            warmup_scheduler.step()
+
+        total_training_loss += loss.item()
+
+    avg_loss = total_training_loss / len(train_loader)
+    print(f"Epoch {epoch + 1}/{epochs}, Training Loss: {avg_loss:.4f}")
+
 def print_gpu_memory(tag=""):
+    """Print detailed GPU memory usage"""
     if torch.cuda.is_available():
         allocated = torch.cuda.memory_allocated() / 1024**3
         reserved = torch.cuda.memory_reserved() / 1024**3
@@ -463,338 +646,125 @@ def print_gpu_memory(tag=""):
     return 0, 0
 
 def aggressive_cleanup():
+    """Most aggressive cleanup possible"""
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
+        torch.cuda.ipc_collect()
     gc.collect() 
 
-def _make_handlers():
-    """Custom fvcore FLOP handlers for ops it doesn't natively support."""
-    def elementwise(inputs, outputs):
-        out_shape = get_shape(outputs[0])
-        return int(np.prod(out_shape)) if out_shape else 0
-    def softmax(inputs, outputs):
-        out_shape = get_shape(outputs[0])
-        return int(np.prod(out_shape)) * 2 if out_shape else 0
-    def gelu(inputs, outputs):
-        in_shape = get_shape(inputs[0])
-        return int(np.prod(in_shape)) * 8 if in_shape else 0
-    def silu(inputs, outputs):
-        in_shape = get_shape(inputs[0])
-        return int(np.prod(in_shape)) * 4 if in_shape else 0
-    def power(inputs, outputs):
-        out_shape = get_shape(outputs[0])
-        return int(np.prod(out_shape)) if out_shape else 0
-    def sdpa(inputs, outputs):
-        q_shape = get_shape(inputs[0])
-        k_shape = get_shape(inputs[1])
-        if not q_shape or not k_shape:
-            return 0
+def compute_flops_with_handlers(model, flop_inputs):
+    """Compute FLOPs with custom handlers for unsupported ops."""
+    
+    def softmax_flop_jit(inputs, outputs):
+        output_shape = get_shape(outputs[0])
+        flops = int(np.prod(output_shape)) * 2
+        return flops
+
+    def gelu_flop_jit(inputs, outputs):
+        input_shape = get_shape(inputs[0])
+        flops = int(np.prod(input_shape)) * 8
+        return flops
+
+    def sub_flop_jit(inputs, outputs):
+        # Element-wise subtraction: 1 flop per element
+        output_shape = get_shape(outputs[0])
+        return int(np.prod(output_shape))
+
+    def pow_flop_jit(inputs, outputs):
+        # Element-wise power: 1 flop per element
+        output_shape = get_shape(outputs[0])
+        return int(np.prod(output_shape))
+
+    def upsample_bicubic2d_flop_jit(inputs, outputs):
+        # Bicubic interpolation: ~32 flops per output element
+        # (4x4 neighborhood * 2 ops per point for interpolation)
+        output_shape = get_shape(outputs[0])
+        return int(np.prod(output_shape)) * 32
+
+    def scaled_dot_product_attention_flop_jit(inputs, outputs):
+        # Q, K, V are inputs[0], inputs[1], inputs[2]
+        # FLOPs = 2 * seq_len^2 * head_dim (QK^T) + 2 * seq_len^2 * head_dim (AV)
+        q_shape = get_shape(inputs[0])  # [B, H, S, D]
+        k_shape = get_shape(inputs[1])  # [B, H, S, D]
+        
+        # q_shape: (batch, heads, seq_len, head_dim)
         batch, heads, seq_len, head_dim = q_shape
         kv_seq_len = k_shape[2]
-        return (
-            batch * heads * seq_len * kv_seq_len * head_dim * 2  # QK^T
-            + batch * heads * seq_len * kv_seq_len * 2           # softmax
-            + batch * heads * seq_len * head_dim * kv_seq_len * 2  # AV
-        )
-
-    def matmul(inputs, outputs):
-        shape_a = get_shape(inputs[0])
-        out_shape = get_shape(outputs[0])
-        if not shape_a or not out_shape: return 0
-        k = shape_a[-1] if len(shape_a) > 0 else 1
-        out_volume = int(np.prod(out_shape)) if len(out_shape) > 0 else 1
-        return 2 * k * out_volume
-
-    # We force math-SDP in compute_flops, which decomposes attention into
-    # bmm+softmax+bmm at the trace level. The matmul/softmax handlers below
-    # then count those decomposed ops. Registering an SDPA handler in
-    # parallel double-counts attention FLOPs (~10% inflation on ViTs), so
-    # we deliberately leave SDPA out.
-    return {
-        "aten::add":   elementwise,
-        "aten::mul":   elementwise,
-        "aten::div":   elementwise,
-        "aten::sub":   elementwise,
-        "aten::pow":   power,
-        "aten::softmax":  softmax,
-        "aten::gelu":  gelu,
-        "aten::silu":  silu,
-        "aten::matmul": matmul,
-        "aten::mm":     matmul,
-        "aten::bmm":    matmul,
-    }
-
-
-def compute_flops(model, inputs):
-    model.eval()
-
-    prev_use_cache = None
-    if hasattr(model, "config") and hasattr(model.config, "use_cache"):
-        prev_use_cache = model.config.use_cache
-        model.config.use_cache = False
-
-    # transformers >= 4.45 builds the causal mask via torch.vmap inside
-    # `sdpa_mask_recent_torch`. fvcore's JIT tracer can't go through vmap
-    # (raises "RuntimeError: unordered_map::at"), so force the eager mask
-    # interface for the trace.
-    prev_attn_impl = None
-    if hasattr(model, "config"):
-        prev_attn_impl = getattr(model.config, "_attn_implementation", None)
-        try:
-            model.config._attn_implementation = "eager"
-        except Exception:
-            prev_attn_impl = None
-
-    import torch.backends.cuda
-    prev_flash = torch.backends.cuda.flash_sdp_enabled()
-    prev_mem = torch.backends.cuda.mem_efficient_sdp_enabled()
-    prev_math = torch.backends.cuda.math_sdp_enabled()
-
-    torch.backends.cuda.enable_flash_sdp(False)
-    torch.backends.cuda.enable_mem_efficient_sdp(False)
-    torch.backends.cuda.enable_math_sdp(True)
-
-    try:
-        analyzer = FlopCountAnalysis(model, inputs)
-
-        handlers = _make_handlers()
-        analyzer.set_op_handle(**handlers)
-
-        return int(analyzer.total())
-
-    finally:
-        if prev_use_cache is not None:
-            model.config.use_cache = prev_use_cache
-
-        if prev_attn_impl is not None:
-            try:
-                model.config._attn_implementation = prev_attn_impl
-            except Exception:
-                pass
-
-        torch.backends.cuda.enable_flash_sdp(prev_flash)
-        torch.backends.cuda.enable_mem_efficient_sdp(prev_mem)
-        torch.backends.cuda.enable_math_sdp(prev_math)
-
-
-def compute_theoretical_flops(model, dense_flops):
-    """
-    Theoretical FLOPs assuming a sparse kernel that skips zeros. Returns
-    None when there is no zero pattern to exploit — the dense reference,
-    or any structurally-pruned model whose linears have been resized
-    rather than zeroed. In those cases the effective FLOPs measurement
-    is already the truthful number, and a "theoretical" version would
-    just collapse onto the dense constant.
-    """
-    total_params = 0
-    nonzero_params = 0
-    for module in model.modules():
-        if isinstance(module, torch.nn.Linear):
-            w = module.weight.data
-            total_params += w.numel()
-            nonzero_params += (w != 0).sum().item()
-
-    if total_params == 0 or nonzero_params == total_params:
-        return None
-    sparsity = 1 - nonzero_params / total_params
-    return int(dense_flops * (1 - sparsity))
-
-
-@torch.no_grad()
-def benchmark_latency_llm(model, seq_len=2048, batch_size=1,
-                          warmup=10, iterations=100, disable_flash=False):
-    """Wall-clock per-forward latency in milliseconds.
-
-    disable_flash: if True, force SDPA onto the math kernel and skip the
-    in-attention Q/K/V flash-padding. Useful as a control to measure
-    "vanilla without flash" — i.e., the kernel path the irregularly-
-    pruned baselines are stuck on.
-    """
-    import torch.backends.cuda as bc
-    device = next(model.parameters()).device
-    ids = torch.randint(0, model.config.vocab_size,
-                        (batch_size, seq_len), device=device)
+        
+        # QK^T matmul: [B, H, S, D] x [B, H, D, S] -> [B, H, S, S]
+        qk_flops = batch * heads * seq_len * kv_seq_len * head_dim * 2
+        # Softmax over attention weights
+        softmax_flops = batch * heads * seq_len * kv_seq_len * 2
+        # AV matmul: [B, H, S, S] x [B, H, S, D] -> [B, H, S, D]
+        av_flops = batch * heads * seq_len * head_dim * kv_seq_len * 2
+        
+        return qk_flops + softmax_flops + av_flops
 
     model.eval()
+    with torch.no_grad():
+        flop_counter = FlopCountAnalysis(model, flop_inputs)
+        
+        flop_counter.set_op_handle("aten::add", elementwise_flop_counter(1, 0))
+        flop_counter.set_op_handle("aten::mul", elementwise_flop_counter(1, 0))
+        flop_counter.set_op_handle("aten::div", elementwise_flop_counter(1, 0))
+        flop_counter.set_op_handle("aten::softmax", softmax_flop_jit)
+        flop_counter.set_op_handle("aten::gelu", gelu_flop_jit)
+        
+        # New handlers for unsupported ops
+        flop_counter.set_op_handle("aten::sub", sub_flop_jit)
+        flop_counter.set_op_handle("aten::pow", pow_flop_jit)
+        flop_counter.set_op_handle("aten::upsample_bicubic2d", upsample_bicubic2d_flop_jit)
+        flop_counter.set_op_handle("aten::scaled_dot_product_attention", scaled_dot_product_attention_flop_jit)
 
-    prev_use_cache = None
-    if hasattr(model, "config") and hasattr(model.config, "use_cache"):
-        prev_use_cache = model.config.use_cache
-        model.config.use_cache = False
-
-    # Push our custom attention onto SDPA's flash/efficient path. The
-    # default forward keeps HF's 4-D causal mask, which routes SDPA to
-    # the math kernel and dominates per-layer cost (especially under
-    # irregular per-layer head_dim). For un-padded benchmark inputs the
-    # is_causal=True dispatch is correct. When disable_flash=True we
-    # leave the mask in place and force the math kernel.
-    prev_force_flash = []
-    if not disable_flash:
-        for m in model.modules():
-            if hasattr(m, "force_flash_attn"):
-                prev_force_flash.append((m, m.force_flash_attn))
-                m.force_flash_attn = True
-
-    prev_flash = bc.flash_sdp_enabled()
-    prev_mem   = bc.mem_efficient_sdp_enabled()
-    prev_math  = bc.math_sdp_enabled()
-    if disable_flash:
-        bc.enable_flash_sdp(False)
-        bc.enable_mem_efficient_sdp(False)
-        bc.enable_math_sdp(True)
-
-    try:
-        times = []
-        for _ in range(iterations + warmup):
-            torch.cuda.synchronize()
-            t0 = time.perf_counter()
-            _ = model(ids)
-            torch.cuda.synchronize()
-            times.append(time.perf_counter() - t0)
-    finally:
-        if prev_use_cache is not None:
-            model.config.use_cache = prev_use_cache
-        for m, prev in prev_force_flash:
-            m.force_flash_attn = prev
-        bc.enable_flash_sdp(prev_flash)
-        bc.enable_mem_efficient_sdp(prev_mem)
-        bc.enable_math_sdp(prev_math)
-
-    return (sum(times[warmup:]) / iterations) * 1000
-
-
-@torch.no_grad()
-def benchmark_latency_vit(model, image_size=224, batch_size=1,
-                           warmup=10, iterations=100):
-    """Wall-clock per-forward latency for ViTs (image input)."""
-    device = next(model.parameters()).device
-    inputs = torch.randn(batch_size, 3, image_size, image_size, device=device)
+    return flop_counter.total()
     
-    model.eval()
-    times = []
-    for _ in range(iterations + warmup):
-        torch.cuda.synchronize()
-        t0 = time.perf_counter()
-        _ = model(inputs)
-        torch.cuda.synchronize()
-        times.append(time.perf_counter() - t0)
-    
-    return (sum(times[warmup:]) / iterations) * 1000
-
-
-def compute_flops_llm_analytical(model, seq_len):
+def build_warmup_scheduler(
+    optimizer,
+    num_epochs: int,
+    dataloader_len: int,
+    grad_accumulation_steps: int = 1,
+    warmup_ratio: float = 0.05,
+    schedule_type: str = "cosine",
+):
     """
-    Analytical forward FLOPs for a Llama-style LLM at batch_size=1.
+    Builds a LambdaLR scheduler with linear warmup and optional cosine decay.
 
-    Avoids fvcore's JIT tracer, which fails on transformers >= 4.45 with
-    "RuntimeError: unordered_map::at" because the causal-mask path goes
-    through torch.vmap. We instead walk the actual nn.Linear modules and
-    add an SDPA term per attention layer, so the count automatically
-    reflects structural pruning (resized linears, fewer heads).
+    Args:
+        optimizer: torch optimizer
+        num_epochs: number of training epochs
+        dataloader_len: len(train_dataloader)
+        grad_accumulation_steps: gradient accumulation steps
+        warmup_ratio: fraction of total steps for warmup (e.g., 0.05)
+        schedule_type: "cosine" or "constant"
+
+    Returns:
+        scheduler (LambdaLR)
     """
-    flops = 0
 
-    # Every transformer Linear runs once per token: 2 * seq * in * out FMAs.
-    # This covers QKV, O, MLP gate/up/down, and the LM head.
-    for m in model.modules():
-        if isinstance(m, torch.nn.Linear):
-            flops += 2 * seq_len * m.in_features * m.out_features
-
-    # SDPA per attention layer. Prefer per-module num_heads/head_dim so
-    # structurally-pruned models with heterogeneous layers are counted
-    # correctly; fall back to a uniform config-based estimate if no
-    # attention module exposes those attributes.
-    sdpa_layers_seen = 0
-    for m in model.modules():
-        cls_name = m.__class__.__name__
-        if not cls_name.endswith("Attention"):
-            continue
-        num_heads = getattr(m, "num_heads", None)
-        head_dim  = getattr(m, "head_dim",  None)
-        if num_heads is None or head_dim is None:
-            continue
-        flops += 4 * num_heads * seq_len * seq_len * head_dim   # QK^T + AV
-        flops += 3 * num_heads * seq_len * seq_len              # softmax
-        sdpa_layers_seen += 1
-
-    if sdpa_layers_seen == 0:
-        cfg = getattr(model, "config", None)
-        if cfg is not None:
-            n_layers = getattr(cfg, "num_hidden_layers", 0)
-            n_heads  = getattr(cfg, "num_attention_heads", 0)
-            h_size   = getattr(cfg, "hidden_size", 0)
-            head_dim = getattr(cfg, "head_dim", None)
-            if head_dim is None and n_heads:
-                head_dim = h_size // n_heads
-            if n_layers and n_heads and head_dim:
-                flops += n_layers * (
-                    4 * n_heads * seq_len * seq_len * head_dim
-                    + 3 * n_heads * seq_len * seq_len
-                )
-
-    return flops
-
-
-def benchmark_full(model, model_type="llm", seq_len=2048, image_size=224,
-                   dense_flops=None, disable_flash=False):
-    """
-    Run all benchmarks. Returns a dict of measurements.
-
-    model_type: "llm" or "vit"
-    dense_flops: if provided, also reports theoretical sparse FLOPs.
-                 Get this by running compute_flops on the unpruned model once.
-    """
-    device = next(model.parameters()).device
-
-    results = {
-        "model_type": model_type,
-    }
-
-    if model_type == "llm":
-        results["effective_flops_g"] = compute_flops_llm_analytical(
-            model, seq_len) / 1e9
-        results["latency_bs1_ms"] = benchmark_latency_llm(
-            model, seq_len=seq_len, batch_size=1, disable_flash=disable_flash)
-        results["latency_bs16_ms"] = benchmark_latency_llm(
-            model, seq_len=seq_len, batch_size=16, disable_flash=disable_flash)
-    else:
-        flops_input = torch.randn(1, 3, image_size, image_size, device=device)
-        results["effective_flops_g"] = compute_flops(model, flops_input) / 1e9
-        results["latency_bs1_ms"] = benchmark_latency_vit(
-            model, image_size=image_size, batch_size=1)
-        results["latency_bs64_ms"] = benchmark_latency_vit(
-            model, image_size=image_size, batch_size=64)
-
-    if dense_flops is not None:
-        theoretical = compute_theoretical_flops(model, dense_flops)
-        if theoretical is not None:
-            results["theoretical_flops_g"] = theoretical / 1e9
-            results["sparsity_realizable"] = 1 - theoretical / dense_flops
-
-    return results
-
-def print_benchmark_report(bench):
-    for k, v in bench.items():
-        print(f"{k}: {v}")
-
-def build_warmup_scheduler(optimizer, num_epochs: int, dataloader_len: int, grad_accumulation_steps: int = 1, warmup_ratio: float = 0.05, schedule_type: str = "cosine"):
     total_steps = (num_epochs * dataloader_len) // grad_accumulation_steps
     warmup_steps = int(warmup_ratio * total_steps)
 
     def lr_lambda(step: int):
         if warmup_steps > 0 and step < warmup_steps:
             return step / max(1, warmup_steps)
+
         if schedule_type == "constant":
             return 1.0
+
+        # cosine decay
         progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
         return 0.5 * (1.0 + math.cos(math.pi * progress))
 
     return LambdaLR(optimizer, lr_lambda)
 
 def str2bool(v):
-    if isinstance(v, bool): return v
-    if v.lower() in ("yes", "true", "t", "1"): return True
-    elif v.lower() in ("no", "false", "f", "0"): return False
-    else: raise argparse.ArgumentTypeError("Boolean value expected.")
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ("yes", "true", "t", "1"):
+        return True
+    elif v.lower() in ("no", "false", "f", "0"):
+        return False
+    else:
+        raise argparse.ArgumentTypeError("Boolean value expected.")
