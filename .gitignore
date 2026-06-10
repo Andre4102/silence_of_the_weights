@@ -23,3 +23,6 @@ checkpoints/
 
 .DS_Store
 .ipynb_checkpoints/
+
+# local cluster-specific launchers (not for public repo)
+run_local/
