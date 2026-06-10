@@ -52,19 +52,16 @@ The experiments sweep three independent axes (see the paper, Sec. 2):
 - `compute_sparsity.py` — per-layer attention sparsity (Fig. 3).
 - `plot_fisher_importance.py` — Fisher-importance plots.
 
-### Launchers (SLURM)
-- `pruning_ast*.sh`, `pruning_whisper*.sh`, `whisper_eval*.sh`,
-  `eval_*whisper*.sh`, `eval_launcher_remaining.sh` — cluster job scripts
-  (Leonardo / Karolina). Paths inside are cluster-specific and will need
-  adjusting.
+### Launchers (SLURM skeletons)
+Generic SLURM templates; every input is exposed as an environment variable
+with a default (see the header of each file).
+- `pruning_ast.sh` — AST pruning run.
+- `pruning_whisper.sh` — Whisper pruning run.
+- `whisper_eval.sh` — single-task Whisper evaluation.
 
-## Requirements
-
-PyTorch, `transformers`, `triton`, `librosa`, `soundfile`, `jiwer`,
-`sacrebleu`, `pandas`, `pyarrow`, `tqdm`.
-
-## Notes
-
-This code was extracted from a larger internal research mono-repo; only the
-AST + Whisper pruning pipeline used in the paper is included here. Cluster
-paths in the shell launchers are left as-is for reference.
+Example:
+```bash
+PRUNING_STRATEGY=entire_head THRESHOLD_STRATEGY=local \
+  IMPORTANCE_STRATEGY=fisher_information DATASET=speechcommands \
+  sbatch pruning_ast.sh
+```
