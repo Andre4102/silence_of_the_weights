@@ -5,7 +5,8 @@ Structural pruning of attention-based audio architectures with second-order
 
 > A. Diecidue, C. A. Barbano, P. Fraternali, M. Fontaine, E. Tartaglione,
 > *"The silence of the weights: a structural pruning strategy for
-> attention-based audio signal architectures with second order metrics."*
+> attention-based audio signal architectures with second order metrics,"*
+> Interspeech 2026.
 
 We propose a channel-wise structural pruning strategy targeting the attention
 block. Each head and each of the four projection matrices (query, key, value,
@@ -132,4 +133,17 @@ Example:
 PRUNING_STRATEGY=entire_head THRESHOLD_STRATEGY=local \
   IMPORTANCE_STRATEGY=fisher_information DATASET=speechcommands \
   sbatch pruning_ast.sh
+```
+
+## Cite us
+
+If you use this code or build on our results, please cite:
+
+```bibtex
+@inproceedings{diecidue2026silence,
+  author    = {Diecidue, Andrea and Barbano, Carlo Alberto and Fraternali, Piero and Fontaine, Mathieu and Tartaglione, Enzo},
+  title     = {The Silence of the Weights: A Structural Pruning Strategy for Attention-Based Audio Signal Architectures with Second Order Metrics},
+  booktitle = {Proc. Interspeech 2026},
+  year      = {2026},
+}
 ```
