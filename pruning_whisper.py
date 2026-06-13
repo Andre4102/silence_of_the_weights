@@ -1,5 +1,6 @@
 import os
 import re
+import json
 import unicodedata
 import torch
 from transformers import (
@@ -376,6 +377,16 @@ def main(pruning_strategy, threshold_strategy, importance_strategy, epochs, lr, 
             model = merge_lora_weights(model)
         #load the best weights from the original model
         save_checkpoint(model, processor, ckpt_dir, iteration = it)
+        # Persist attention-block sparsity (overall + per-layer) next to the
+        # checkpoint so the later eval/benchmark stage can match WER/FLOPs/latency
+        # to the exact attention sparsity without recomputing the pruning.
+        with open(os.path.join(ckpt_dir, "sparsity.json"), "w") as f:
+            json.dump({
+                "iteration": it + 1,
+                "param_count": param_count,
+                "attention_sparsity": sparsity,
+                "stats": final_stats,
+            }, f, indent=2)
         model, processor, _, _, _, _ = load_checkpoint(ckpt_dir, device=device, load_lora=False)
 
         #absorb lora if added

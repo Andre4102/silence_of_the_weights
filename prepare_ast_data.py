@@ -149,35 +149,43 @@ def prepare_audioset():
     ds = load_dataset("agkphysics/AudioSet", "balanced")
     ds = ds.cast_column("audio", Audio(decode=False))
 
+    import io
     split_out = {"train": dc["tr_data"], "test": dc["eval_data"]}
     for split, out_name in split_out.items():
-        entries = []
+        entries, skipped, n = [], 0, 0
         for ex in ds[split]:
+            n += 1
+            if n % 2000 == 0:
+                print(f"[as] {split}: {n} processed, {len(entries)} kept, {skipped} skipped", flush=True)
             mids = [m for m in ex["labels"] if m in valid_mids]
             if not mids:
                 continue
             au = ex["audio"]
             wav_path = audio_dir / f"{ex['video_id']}.wav"
-            if not wav_path.exists():
-                if au.get("path") and os.path.exists(au["path"]):
-                    arr, sr = sf.read(au["path"])
-                else:
-                    import io
-                    arr, sr = sf.read(io.BytesIO(au["bytes"]))
-                # AST expects 16 kHz mono (matches config mean/std)
-                if getattr(arr, "ndim", 1) == 2:
-                    arr = arr.mean(axis=1)
-                if sr != 16000:
-                    import librosa
-                    arr = librosa.resample(arr.astype("float32"),
-                                           orig_sr=sr, target_sr=16000)
-                    sr = 16000
-                sf.write(str(wav_path), arr, sr)
+            try:
+                if not wav_path.exists():
+                    if au.get("path") and os.path.exists(au["path"]):
+                        arr, sr = sf.read(au["path"])
+                    else:
+                        arr, sr = sf.read(io.BytesIO(au["bytes"]))
+                    # AST expects 16 kHz mono (matches config mean/std)
+                    if getattr(arr, "ndim", 1) == 2:
+                        arr = arr.mean(axis=1)
+                    if sr != 16000:
+                        import librosa
+                        arr = librosa.resample(arr.astype("float32"),
+                                               orig_sr=sr, target_sr=16000)
+                        sr = 16000
+                    sf.write(str(wav_path), arr, sr)
+            except Exception as e:
+                skipped += 1
+                print(f"[as] skip {ex.get('video_id')}: {type(e).__name__} {e}", flush=True)
+                continue
             entries.append({"wav": str(wav_path.resolve()), "labels": ",".join(mids)})
         out = root / out_name
         with open(out, "w") as f:
             json.dump({"data": entries}, f)
-        print(f"[as] {split}: {len(entries)} samples -> {out}")
+        print(f"[as] {split}: {len(entries)} samples ({skipped} skipped) -> {out}", flush=True)
 
 
 def main():
