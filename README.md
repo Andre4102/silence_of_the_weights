@@ -84,21 +84,21 @@ each one).
 | entire-head | local | Fisher | 20.08 | 19.37 | 18.58 | 17.82 | 16.87 | 16.29 |
 | entire-head | local | magnitude | 20.03 | 19.32 | 18.54 | 17.80 | 16.81 | 16.29 |
 
-### Whisper — avg WER (%) over seen languages vs global attention sparsity
+### Whisper — avg WER (%) over en/fr/it/pl vs global attention sparsity
 
-Average over en/de/fr/es/it/pl (dense WER_en 3.88%); per-language WER/CER and
-CoVoST BLEU are in [`RESULTS_whisper.md`](RESULTS_whisper.md).
+Average over en/fr/it/pl (dense WER_en 3.88%); per-language WER and CoVoST BLEU
+are in [`RESULTS_whisper.md`](RESULTS_whisper.md).
 
-| Scheme | Threshold | Importance | 10% | 20% | 30% | 40% | 50% |
-|---|---|---|---|---|---|---|---|
-| per-head | global | Fisher | 7.56 | 7.83 | 8.88 | 12.71 | — |
-| per-head | global | magnitude | 24.40 | 111.29 | 189.83 | 178.16 | — |
-| entire-head | global | Fisher | 7.38 | 7.38 | 7.71 | 8.56 | — |
-| entire-head | global | magnitude | 7.82 | 9.62 | 13.15 | 26.83 | — |
-| per-head | local | Fisher | 8.07 | 9.94 | 15.65 | 36.88 | — |
-| per-head | local | magnitude | 10.93 | 14.09 | 25.18 | 60.46 | — |
-| entire-head | local | Fisher | 7.57 | 7.96 | 8.29 | 9.56 | 20.15 |
-| entire-head | local | magnitude | 8.03 | 9.10 | 12.73 | 15.41 | 31.42 |
+| Scheme | Threshold | Importance | 10% | 20% | 30% | 40% |
+|---|---|---|---|---|---|---|
+| per-head | global | Fisher | 8.04 | 8.21 | 9.29 | 13.27 |
+| per-head | global | magnitude | 24.49 | 99.05 | 191.77 | 212.96 |
+| entire-head | global | Fisher | 7.86 | 7.83 | 8.02 | 8.85 |
+| entire-head | global | magnitude | 8.28 | 9.79 | 12.93 | 27.76 |
+| per-head | local | Fisher | 8.54 | 10.52 | 16.01 | 37.37 |
+| per-head | local | magnitude | 11.64 | 14.59 | 25.42 | 60.32 |
+| entire-head | local | Fisher | 7.99 | 8.23 | 8.65 | 9.76 |
+| entire-head | local | magnitude | 8.65 | 10.06 | 14.28 | 16.30 |
 
 ## Repository layout
 
