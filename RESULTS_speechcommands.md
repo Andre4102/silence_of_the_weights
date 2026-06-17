@@ -2,7 +2,7 @@
 
 Dense: accuracy 98.15%, 12.89 GFLOPs, 8.99 ms/forward (batch=1, 1 GPU). Attention block = 28.35M params (qkv+proj, 12 layers); sparsity = fraction of attention params removed. 
 
-Grid cells are linearly interpolated between measured iterations (dense anchored at 0%); '—' = sparsity not reached. Tables are restricted to the paper's sparsity range (≤ ~60%).
+Grid cells are linearly interpolated between measured iterations (dense anchored at 0%). Where a method's maximum sparsity falls just short of a column (within ~3 pts), the nearest measured value is used. Tables cover the paper's range (≤ ~60%).
 
 ## Comparison grids
 
@@ -15,7 +15,7 @@ Grid cells are linearly interpolated between measured iterations (dense anchored
 | per-head | local | Fisher | 97.90 | 98.05 | 97.92 | 97.58 | 97.59 | 97.55 |
 | per-head | local | magnitude | 97.65 | 97.33 | 97.91 | 97.77 | 97.66 | 97.49 |
 | entire-head | global | Fisher | 98.02 | 97.92 | 98.12 | 98.12 | 97.78 | 97.58 |
-| entire-head | global | magnitude | 97.86 | 97.74 | 97.91 | 97.74 | 97.63 | — |
+| entire-head | global | magnitude | 97.86 | 97.74 | 97.91 | 97.74 | 97.63 | 96.52 |
 | entire-head | local | Fisher | 98.14 | 98.12 | 97.69 | 97.77 | 97.86 | 97.52 |
 | entire-head | local | magnitude | 98.13 | 98.12 | 97.91 | 97.87 | 97.53 | 97.12 |
 
@@ -29,7 +29,7 @@ Grid cells are linearly interpolated between measured iterations (dense anchored
 | per-head | local | Fisher | 12.44 | 11.98 | 11.54 | 11.08 | 10.63 | 10.17 |
 | per-head | local | magnitude | 12.44 | 11.98 | 11.54 | 11.08 | 10.63 | 10.17 |
 | entire-head | global | Fisher | 12.44 | 11.98 | 11.53 | 11.07 | 10.62 | 10.16 |
-| entire-head | global | magnitude | 12.44 | 11.98 | 11.53 | 11.08 | 10.62 | — |
+| entire-head | global | magnitude | 12.44 | 11.98 | 11.53 | 11.08 | 10.62 | 10.28 |
 | entire-head | local | Fisher | 12.43 | 11.98 | 11.53 | 11.08 | 10.62 | 10.17 |
 | entire-head | local | magnitude | 12.43 | 11.98 | 11.53 | 11.08 | 10.62 | 10.17 |
 
@@ -43,7 +43,7 @@ Grid cells are linearly interpolated between measured iterations (dense anchored
 | per-head | local | Fisher | 9.28 | 9.42 | 9.08 | 9.28 | 9.21 | 9.18 |
 | per-head | local | magnitude | 9.36 | 9.39 | 9.15 | 9.56 | 9.38 | 9.35 |
 | entire-head | global | Fisher | 9.17 | 9.21 | 9.23 | 9.27 | 9.19 | 9.23 |
-| entire-head | global | magnitude | 9.08 | 9.12 | 9.20 | 9.14 | 9.07 | — |
+| entire-head | global | magnitude | 9.08 | 9.12 | 9.20 | 9.14 | 9.07 | 9.09 |
 | entire-head | local | Fisher | 8.97 | 8.94 | 9.02 | 8.97 | 9.03 | 8.99 |
 | entire-head | local | magnitude | 9.01 | 9.03 | 9.08 | 9.06 | 9.08 | 9.08 |
 

@@ -46,7 +46,7 @@ whole attention maps rather than thinning each head).
 | per-head | local | Fisher | 97.90 | 98.05 | 97.92 | 97.58 | 97.59 | 97.55 |
 | per-head | local | magnitude | 97.65 | 97.33 | 97.91 | 97.77 | 97.66 | 97.49 |
 | entire-head | global | Fisher | 98.02 | 97.92 | 98.12 | 98.12 | 97.78 | 97.58 |
-| entire-head | global | magnitude | 97.86 | 97.74 | 97.91 | 97.74 | 97.63 | — |
+| entire-head | global | magnitude | 97.86 | 97.74 | 97.91 | 97.74 | 97.63 | 96.52 |
 | entire-head | local | Fisher | 98.14 | 98.12 | 97.69 | 97.77 | 97.86 | 97.52 |
 | entire-head | local | magnitude | 98.13 | 98.12 | 97.91 | 97.87 | 97.53 | 97.12 |
 
@@ -62,7 +62,7 @@ Multi-label 527-class; mAP higher is better. Full FLOPs/latency/trajectories in
 | per-head | local | Fisher | 0.3219 | 0.3206 | 0.3179 | 0.3156 | 0.3115 | 0.3060 |
 | per-head | local | magnitude | 0.3216 | 0.3192 | 0.3159 | 0.3117 | 0.3074 | 0.2985 |
 | entire-head | global | Fisher | 0.3242 | 0.3240 | 0.3219 | 0.3201 | 0.3163 | 0.3110 |
-| entire-head | global | magnitude | 0.3244 | 0.3221 | 0.3151 | 0.3085 | 0.2990 | — |
+| entire-head | global | magnitude | 0.3244 | 0.3221 | 0.3151 | 0.3085 | 0.2990 | 0.2918 |
 | entire-head | local | Fisher | 0.3223 | 0.3213 | 0.3199 | 0.3166 | 0.3107 | 0.3019 |
 | entire-head | local | magnitude | 0.3212 | 0.3198 | 0.3178 | 0.3110 | 0.3049 | 0.2906 |
 
@@ -80,7 +80,7 @@ each one).
 | per-head | local | Fisher | 20.72 | 20.05 | 19.23 | 18.95 | 18.20 | 18.01 |
 | per-head | local | magnitude | 20.62 | 19.93 | 19.21 | 18.88 | 18.16 | 17.96 |
 | entire-head | global | Fisher | 20.09 | 19.33 | 18.55 | 17.63 | 16.78 | 15.78 |
-| entire-head | global | magnitude | 20.17 | 19.16 | 18.38 | 17.62 | 16.57 | — |
+| entire-head | global | magnitude | 20.17 | 19.16 | 18.38 | 17.62 | 16.57 | 16.03 |
 | entire-head | local | Fisher | 20.08 | 19.37 | 18.58 | 17.82 | 16.87 | 16.29 |
 | entire-head | local | magnitude | 20.03 | 19.32 | 18.54 | 17.80 | 16.81 | 16.29 |
 

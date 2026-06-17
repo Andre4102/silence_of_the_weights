@@ -2,7 +2,7 @@
 
 Dense: mAP 0.3226, 131.65 GFLOPs, 20.81 ms/forward (batch=1, 1 GPU). Attention block = 28.35M params (qkv+proj, 12 layers); sparsity = fraction of attention params removed. Multi-label 527-class; headline metric is mAP (higher is better). 
 
-Grid cells are linearly interpolated between measured iterations (dense anchored at 0%); '—' = sparsity not reached. Tables are restricted to the paper's sparsity range (≤ ~60%).
+Grid cells are linearly interpolated between measured iterations (dense anchored at 0%). Where a method's maximum sparsity falls just short of a column (within ~3 pts), the nearest measured value is used. Tables cover the paper's range (≤ ~60%).
 
 ## Comparison grids
 
@@ -15,7 +15,7 @@ Grid cells are linearly interpolated between measured iterations (dense anchored
 | per-head | local | Fisher | 0.3219 | 0.3206 | 0.3179 | 0.3156 | 0.3115 | 0.3060 |
 | per-head | local | magnitude | 0.3216 | 0.3192 | 0.3159 | 0.3117 | 0.3074 | 0.2985 |
 | entire-head | global | Fisher | 0.3242 | 0.3240 | 0.3219 | 0.3201 | 0.3163 | 0.3110 |
-| entire-head | global | magnitude | 0.3244 | 0.3221 | 0.3151 | 0.3085 | 0.2990 | — |
+| entire-head | global | magnitude | 0.3244 | 0.3221 | 0.3151 | 0.3085 | 0.2990 | 0.2918 |
 | entire-head | local | Fisher | 0.3223 | 0.3213 | 0.3199 | 0.3166 | 0.3107 | 0.3019 |
 | entire-head | local | magnitude | 0.3212 | 0.3198 | 0.3178 | 0.3110 | 0.3049 | 0.2906 |
 
@@ -29,7 +29,7 @@ Grid cells are linearly interpolated between measured iterations (dense anchored
 | per-head | local | Fisher | 125.49 | 119.34 | 113.18 | 107.03 | 100.87 | 94.72 |
 | per-head | local | magnitude | 125.49 | 119.34 | 113.18 | 107.03 | 100.87 | 94.72 |
 | entire-head | global | Fisher | 125.43 | 119.21 | 112.99 | 106.77 | 100.55 | 94.33 |
-| entire-head | global | magnitude | 125.43 | 119.21 | 112.99 | 106.77 | 100.55 | — |
+| entire-head | global | magnitude | 125.43 | 119.21 | 112.99 | 106.77 | 100.55 | 95.81 |
 | entire-head | local | Fisher | 125.43 | 119.21 | 112.99 | 106.77 | 100.55 | 94.33 |
 | entire-head | local | magnitude | 125.43 | 119.21 | 112.99 | 106.77 | 100.55 | 94.33 |
 
@@ -43,7 +43,7 @@ Grid cells are linearly interpolated between measured iterations (dense anchored
 | per-head | local | Fisher | 20.72 | 20.05 | 19.23 | 18.95 | 18.20 | 18.01 |
 | per-head | local | magnitude | 20.62 | 19.93 | 19.21 | 18.88 | 18.16 | 17.96 |
 | entire-head | global | Fisher | 20.09 | 19.33 | 18.55 | 17.63 | 16.78 | 15.78 |
-| entire-head | global | magnitude | 20.17 | 19.16 | 18.38 | 17.62 | 16.57 | — |
+| entire-head | global | magnitude | 20.17 | 19.16 | 18.38 | 17.62 | 16.57 | 16.03 |
 | entire-head | local | Fisher | 20.08 | 19.37 | 18.58 | 17.82 | 16.87 | 16.29 |
 | entire-head | local | magnitude | 20.03 | 19.32 | 18.54 | 17.80 | 16.81 | 16.29 |
 
