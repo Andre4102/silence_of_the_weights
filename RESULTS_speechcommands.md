@@ -1,51 +1,51 @@
-# AST SpeechCommands pruning results
+# AST speechcommands pruning results
 
-Dense: accuracy 98.15%, 12.89 GFLOPs, 8.99 ms/forward (batch=1, 1 GPU). Attention block = 28.35M params (qkv+proj, 12 layers); sparsity = fraction of attention params removed.
+Dense: accuracy 98.15%, 12.89 GFLOPs, 8.99 ms/forward (batch=1, 1 GPU). Attention block = 28.35M params (qkv+proj, 12 layers); sparsity = fraction of attention params removed. 
 
-Grid cells are linearly interpolated between measured iterations (dense anchored at 0%); '—' = sparsity not reached.
+Grid cells are linearly interpolated between measured iterations (dense anchored at 0%); '—' = sparsity not reached. Tables are restricted to the paper's sparsity range (≤ ~60%).
 
 ## Comparison grids
 
 #### Accuracy (%) — dense 98.15%
 
-| Scheme | Threshold | Importance | 10% | 20% | 30% | 40% | 50% | 60% | 70% | 80% | 90% |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| per-head | global | Fisher | 98.15 | 97.88 | 97.76 | 97.96 | 97.92 | 97.71 | — | — | — |
-| per-head | global | magnitude | 97.86 | 97.87 | 97.75 | 97.44 | 97.07 | 96.54 | — | — | — |
-| per-head | local | Fisher | 97.90 | 98.05 | 97.92 | 97.58 | 97.59 | 97.55 | 97.24 | — | — |
-| per-head | local | magnitude | 97.65 | 97.33 | 97.91 | 97.77 | 97.66 | 97.49 | 97.01 | — | — |
-| entire-head | global | Fisher | 98.02 | 97.92 | 98.12 | 98.12 | 97.78 | 97.58 | — | — | — |
-| entire-head | global | magnitude | 97.86 | 97.74 | 97.91 | 97.74 | 97.63 | — | — | — | — |
-| entire-head | local | Fisher | 98.14 | 98.12 | 97.69 | 97.77 | 97.86 | 97.52 | 96.95 | 95.82 | 90.31 |
-| entire-head | local | magnitude | 98.13 | 98.12 | 97.91 | 97.87 | 97.53 | 97.12 | 96.46 | 94.25 | 83.80 |
+| Scheme | Threshold | Importance | 10% | 20% | 30% | 40% | 50% | 60% |
+|---|---|---|---|---|---|---|---|---|
+| per-head | global | Fisher | 98.15 | 97.88 | 97.76 | 97.96 | 97.92 | 97.71 |
+| per-head | global | magnitude | 97.86 | 97.87 | 97.75 | 97.44 | 97.07 | 96.54 |
+| per-head | local | Fisher | 97.90 | 98.05 | 97.92 | 97.58 | 97.59 | 97.55 |
+| per-head | local | magnitude | 97.65 | 97.33 | 97.91 | 97.77 | 97.66 | 97.49 |
+| entire-head | global | Fisher | 98.02 | 97.92 | 98.12 | 98.12 | 97.78 | 97.58 |
+| entire-head | global | magnitude | 97.86 | 97.74 | 97.91 | 97.74 | 97.63 | — |
+| entire-head | local | Fisher | 98.14 | 98.12 | 97.69 | 97.77 | 97.86 | 97.52 |
+| entire-head | local | magnitude | 98.13 | 98.12 | 97.91 | 97.87 | 97.53 | 97.12 |
 
 
 #### FLOPs (GFLOPs) — dense 12.89G
 
-| Scheme | Threshold | Importance | 10% | 20% | 30% | 40% | 50% | 60% | 70% | 80% | 90% |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| per-head | global | Fisher | 12.44 | 11.99 | 11.53 | 11.08 | 10.63 | 10.17 | — | — | — |
-| per-head | global | magnitude | 12.44 | 11.99 | 11.53 | 11.08 | 10.63 | 10.17 | — | — | — |
-| per-head | local | Fisher | 12.44 | 11.98 | 11.54 | 11.08 | 10.63 | 10.17 | 9.72 | — | — |
-| per-head | local | magnitude | 12.44 | 11.98 | 11.54 | 11.08 | 10.63 | 10.17 | 9.72 | — | — |
-| entire-head | global | Fisher | 12.44 | 11.98 | 11.53 | 11.07 | 10.62 | 10.16 | — | — | — |
-| entire-head | global | magnitude | 12.44 | 11.98 | 11.53 | 11.08 | 10.62 | — | — | — | — |
-| entire-head | local | Fisher | 12.43 | 11.98 | 11.53 | 11.08 | 10.62 | 10.17 | 9.72 | 9.26 | 8.80 |
-| entire-head | local | magnitude | 12.43 | 11.98 | 11.53 | 11.08 | 10.62 | 10.17 | 9.72 | 9.26 | 8.80 |
+| Scheme | Threshold | Importance | 10% | 20% | 30% | 40% | 50% | 60% |
+|---|---|---|---|---|---|---|---|---|
+| per-head | global | Fisher | 12.44 | 11.99 | 11.53 | 11.08 | 10.63 | 10.17 |
+| per-head | global | magnitude | 12.44 | 11.99 | 11.53 | 11.08 | 10.63 | 10.17 |
+| per-head | local | Fisher | 12.44 | 11.98 | 11.54 | 11.08 | 10.63 | 10.17 |
+| per-head | local | magnitude | 12.44 | 11.98 | 11.54 | 11.08 | 10.63 | 10.17 |
+| entire-head | global | Fisher | 12.44 | 11.98 | 11.53 | 11.07 | 10.62 | 10.16 |
+| entire-head | global | magnitude | 12.44 | 11.98 | 11.53 | 11.08 | 10.62 | — |
+| entire-head | local | Fisher | 12.43 | 11.98 | 11.53 | 11.08 | 10.62 | 10.17 |
+| entire-head | local | magnitude | 12.43 | 11.98 | 11.53 | 11.08 | 10.62 | 10.17 |
 
 
 #### Latency (ms, bs=1) — dense 8.99ms
 
-| Scheme | Threshold | Importance | 10% | 20% | 30% | 40% | 50% | 60% | 70% | 80% | 90% |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| per-head | global | Fisher | 9.45 | 9.28 | 9.32 | 9.42 | 9.28 | 9.39 | — | — | — |
-| per-head | global | magnitude | 9.94 | 9.77 | 9.24 | 9.20 | 9.27 | 9.21 | — | — | — |
-| per-head | local | Fisher | 9.28 | 9.42 | 9.08 | 9.28 | 9.21 | 9.18 | 9.15 | — | — |
-| per-head | local | magnitude | 9.36 | 9.39 | 9.15 | 9.56 | 9.38 | 9.35 | 9.26 | — | — |
-| entire-head | global | Fisher | 9.17 | 9.21 | 9.23 | 9.27 | 9.19 | 9.23 | — | — | — |
-| entire-head | global | magnitude | 9.08 | 9.12 | 9.20 | 9.14 | 9.07 | — | — | — | — |
-| entire-head | local | Fisher | 8.97 | 8.94 | 9.02 | 8.97 | 9.03 | 8.99 | 9.02 | 8.99 | 8.82 |
-| entire-head | local | magnitude | 9.01 | 9.03 | 9.08 | 9.06 | 9.08 | 9.08 | 9.07 | 9.06 | 8.94 |
+| Scheme | Threshold | Importance | 10% | 20% | 30% | 40% | 50% | 60% |
+|---|---|---|---|---|---|---|---|---|
+| per-head | global | Fisher | 9.45 | 9.28 | 9.32 | 9.42 | 9.28 | 9.39 |
+| per-head | global | magnitude | 9.94 | 9.77 | 9.24 | 9.20 | 9.27 | 9.21 |
+| per-head | local | Fisher | 9.28 | 9.42 | 9.08 | 9.28 | 9.21 | 9.18 |
+| per-head | local | magnitude | 9.36 | 9.39 | 9.15 | 9.56 | 9.38 | 9.35 |
+| entire-head | global | Fisher | 9.17 | 9.21 | 9.23 | 9.27 | 9.19 | 9.23 |
+| entire-head | global | magnitude | 9.08 | 9.12 | 9.20 | 9.14 | 9.07 | — |
+| entire-head | local | Fisher | 8.97 | 8.94 | 9.02 | 8.97 | 9.03 | 8.99 |
+| entire-head | local | magnitude | 9.01 | 9.03 | 9.08 | 9.06 | 9.08 | 9.08 |
 
 
 ### Full per-iteration trajectories
@@ -53,7 +53,7 @@ Grid cells are linearly interpolated between measured iterations (dense anchored
 
 **per-head · global · Fisher**
 
-| attn sparsity | FLOPs (G) | latency (ms) | accuracy |
+| attn sparsity | FLOPs (G) | latency (ms) | Accuracy (%) |
 |---|---|---|---|
 | 0.0% | 12.89 | 9.29 | 98.15% |
 | 9.9% | 12.44 | 9.46 | 98.16% |
@@ -65,11 +65,10 @@ Grid cells are linearly interpolated between measured iterations (dense anchored
 | 51.9% | 10.54 | 9.24 | 97.86% |
 | 56.6% | 10.33 | 9.24 | 97.66% |
 | 60.9% | 10.13 | 9.44 | 97.73% |
-| 64.8% | 9.96 | 9.27 | 97.61% |
 
 **per-head · global · magnitude**
 
-| attn sparsity | FLOPs (G) | latency (ms) | accuracy |
+| attn sparsity | FLOPs (G) | latency (ms) | Accuracy (%) |
 |---|---|---|---|
 | 0.0% | 12.89 | 9.76 | 98.15% |
 | 9.9% | 12.44 | 9.94 | 97.86% |
@@ -81,11 +80,10 @@ Grid cells are linearly interpolated between measured iterations (dense anchored
 | 51.9% | 10.54 | 9.29 | 96.94% |
 | 56.6% | 10.33 | 9.23 | 96.72% |
 | 60.9% | 10.13 | 9.20 | 96.49% |
-| 64.8% | 9.96 | 9.26 | 96.09% |
 
 **per-head · local · Fisher**
 
-| attn sparsity | FLOPs (G) | latency (ms) | accuracy |
+| attn sparsity | FLOPs (G) | latency (ms) | Accuracy (%) |
 |---|---|---|---|
 | 0.0% | 12.89 | 9.19 | 98.15% |
 | 10.9% | 12.40 | 9.29 | 97.87% |
@@ -96,12 +94,10 @@ Grid cells are linearly interpolated between measured iterations (dense anchored
 | 50.0% | 10.63 | 9.21 | 97.59% |
 | 56.2% | 10.34 | 9.44 | 97.62% |
 | 60.9% | 10.13 | 9.12 | 97.54% |
-| 65.6% | 9.92 | 9.17 | 97.24% |
-| 70.3% | 9.71 | 9.14 | 97.24% |
 
 **per-head · local · magnitude**
 
-| attn sparsity | FLOPs (G) | latency (ms) | accuracy |
+| attn sparsity | FLOPs (G) | latency (ms) | Accuracy (%) |
 |---|---|---|---|
 | 0.0% | 12.89 | 9.28 | 98.15% |
 | 10.9% | 12.40 | 9.36 | 97.60% |
@@ -112,12 +108,10 @@ Grid cells are linearly interpolated between measured iterations (dense anchored
 | 50.0% | 10.63 | 9.38 | 97.66% |
 | 56.2% | 10.34 | 9.32 | 97.53% |
 | 60.9% | 10.13 | 9.35 | 97.48% |
-| 65.6% | 9.92 | 9.35 | 97.22% |
-| 70.3% | 9.71 | 9.25 | 96.99% |
 
 **entire-head · global · Fisher**
 
-| attn sparsity | FLOPs (G) | latency (ms) | accuracy |
+| attn sparsity | FLOPs (G) | latency (ms) | Accuracy (%) |
 |---|---|---|---|
 | 0.0% | 12.89 | 9.12 | 98.15% |
 | 10.4% | 12.42 | 9.17 | 98.02% |
@@ -128,12 +122,10 @@ Grid cells are linearly interpolated between measured iterations (dense anchored
 | 48.6% | 10.69 | 9.17 | 97.88% |
 | 54.1% | 10.43 | 9.24 | 97.48% |
 | 59.0% | 10.21 | 9.24 | 97.65% |
-| 63.2% | 10.02 | 9.19 | 97.38% |
-| 67.3% | 9.84 | 9.27 | 97.24% |
 
 **entire-head · global · magnitude**
 
-| attn sparsity | FLOPs (G) | latency (ms) | accuracy |
+| attn sparsity | FLOPs (G) | latency (ms) | Accuracy (%) |
 |---|---|---|---|
 | 0.0% | 12.89 | 9.06 | 98.15% |
 | 10.4% | 12.42 | 9.08 | 97.85% |
@@ -149,7 +141,7 @@ Grid cells are linearly interpolated between measured iterations (dense anchored
 
 **entire-head · local · Fisher**
 
-| attn sparsity | FLOPs (G) | latency (ms) | accuracy |
+| attn sparsity | FLOPs (G) | latency (ms) | Accuracy (%) |
 |---|---|---|---|
 | 0.0% | 12.89 | 9.03 | 98.15% |
 | 16.7% | 12.13 | 8.94 | 98.14% |
@@ -158,14 +150,10 @@ Grid cells are linearly interpolated between measured iterations (dense anchored
 | 41.7% | 11.00 | 8.94 | 97.86% |
 | 50.0% | 10.62 | 9.03 | 97.86% |
 | 58.3% | 10.25 | 8.97 | 97.61% |
-| 66.6% | 9.87 | 9.04 | 97.17% |
-| 75.0% | 9.49 | 8.98 | 96.62% |
-| 83.3% | 9.11 | 8.99 | 95.29% |
-| 91.6% | 8.73 | 8.77 | 89.10% |
 
 **entire-head · local · magnitude**
 
-| attn sparsity | FLOPs (G) | latency (ms) | accuracy |
+| attn sparsity | FLOPs (G) | latency (ms) | Accuracy (%) |
 |---|---|---|---|
 | 0.0% | 12.89 | 8.99 | 98.15% |
 | 16.7% | 12.13 | 9.02 | 98.12% |
@@ -174,7 +162,3 @@ Grid cells are linearly interpolated between measured iterations (dense anchored
 | 41.7% | 11.00 | 9.05 | 97.89% |
 | 50.0% | 10.62 | 9.08 | 97.53% |
 | 58.3% | 10.25 | 9.09 | 97.21% |
-| 66.6% | 9.87 | 9.07 | 96.76% |
-| 75.0% | 9.49 | 9.08 | 96.03% |
-| 83.3% | 9.11 | 9.04 | 93.08% |
-| 91.6% | 8.73 | 8.92 | 81.53% |

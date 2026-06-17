@@ -27,8 +27,10 @@ The experiments sweep three independent axes (see the paper, Sec. 2):
 
 Tables reproduced with this code. Sparsity is the **fraction of attention-block
 parameters removed**. Cells are interpolated between the 10 pruning iterations;
-`—` means that sparsity was not reached. Full per-language / per-iteration
-tables: [`RESULTS_speechcommands.md`](RESULTS_speechcommands.md) and
+`—` means that sparsity was not reached. Tables are shown over the paper's
+sparsity range (≤ ~60%). Full per-language / per-iteration tables:
+[`RESULTS_speechcommands.md`](RESULTS_speechcommands.md),
+[`RESULTS_audioset.md`](RESULTS_audioset.md), and
 [`RESULTS_whisper.md`](RESULTS_whisper.md).
 
 **Takeaways:** Fisher beats magnitude at every comparable point; entire-head is
@@ -37,46 +39,50 @@ whole attention maps rather than thinning each head).
 
 ### AST — SpeechCommands, accuracy (%) vs attention sparsity (dense 98.15%)
 
-| Scheme | Threshold | Importance | 10% | 20% | 30% | 40% | 50% | 60% | 70% | 80% | 90% |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| per-head | global | Fisher | 98.15 | 97.88 | 97.76 | 97.96 | 97.92 | 97.71 | — | — | — |
-| per-head | global | magnitude | 97.86 | 97.87 | 97.75 | 97.44 | 97.07 | 96.54 | — | — | — |
-| per-head | local | Fisher | 97.90 | 98.05 | 97.92 | 97.58 | 97.59 | 97.55 | 97.24 | — | — |
-| per-head | local | magnitude | 97.65 | 97.33 | 97.91 | 97.77 | 97.66 | 97.49 | 97.01 | — | — |
-| entire-head | global | Fisher | 98.02 | 97.92 | 98.12 | 98.12 | 97.78 | 97.58 | — | — | — |
-| entire-head | global | magnitude | 97.86 | 97.74 | 97.91 | 97.74 | 97.63 | — | — | — | — |
-| entire-head | local | Fisher | 98.14 | 98.12 | 97.69 | 97.77 | 97.86 | 97.52 | 96.95 | 95.82 | 90.31 |
-| entire-head | local | magnitude | 98.13 | 98.12 | 97.91 | 97.87 | 97.53 | 97.12 | 96.46 | 94.25 | 83.80 |
-
-### AST — SpeechCommands, latency (ms/forward, batch=1, dense 8.99 ms)
-
-FLOPs are scheme-invariant at equal sparsity, but latency is not: entire-head
-drops below dense while per-head can sit above it (it keeps all 12 attention
-maps and softmaxes).
-
-| Scheme | Threshold | Importance | 10% | 30% | 50% | 70% | 90% |
-|---|---|---|---|---|---|---|---|
-| per-head | global | Fisher | 9.45 | 9.32 | 9.28 | — | — |
-| per-head | global | magnitude | 9.94 | 9.24 | 9.27 | — | — |
-| entire-head | global | Fisher | 9.17 | 9.23 | 9.19 | — | — |
-| entire-head | local | Fisher | 8.97 | 9.02 | 9.03 | 9.02 | 8.82 |
-| entire-head | local | magnitude | 9.01 | 9.08 | 9.08 | 9.07 | 8.94 |
+| Scheme | Threshold | Importance | 10% | 20% | 30% | 40% | 50% | 60% |
+|---|---|---|---|---|---|---|---|---|
+| per-head | global | Fisher | 98.15 | 97.88 | 97.76 | 97.96 | 97.92 | 97.71 |
+| per-head | global | magnitude | 97.86 | 97.87 | 97.75 | 97.44 | 97.07 | 96.54 |
+| per-head | local | Fisher | 97.90 | 98.05 | 97.92 | 97.58 | 97.59 | 97.55 |
+| per-head | local | magnitude | 97.65 | 97.33 | 97.91 | 97.77 | 97.66 | 97.49 |
+| entire-head | global | Fisher | 98.02 | 97.92 | 98.12 | 98.12 | 97.78 | 97.58 |
+| entire-head | global | magnitude | 97.86 | 97.74 | 97.91 | 97.74 | 97.63 | — |
+| entire-head | local | Fisher | 98.14 | 98.12 | 97.69 | 97.77 | 97.86 | 97.52 |
+| entire-head | local | magnitude | 98.13 | 98.12 | 97.91 | 97.87 | 97.53 | 97.12 |
 
 ### AST — AudioSet, mAP vs attention sparsity (dense 0.3226)
 
 Multi-label 527-class; mAP higher is better. Full FLOPs/latency/trajectories in
 [`RESULTS_audioset.md`](RESULTS_audioset.md).
 
-| Scheme | Threshold | Importance | 10% | 20% | 30% | 40% | 50% | 60% | 70% | 80% | 90% |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| per-head | global | Fisher | 0.3245 | 0.3235 | 0.3206 | 0.3172 | 0.3123 | 0.3086 | — | — | — |
-| per-head | global | magnitude | 0.3224 | 0.3197 | 0.3148 | 0.3047 | 0.2820 | 0.2590 | — | — | — |
-| per-head | local | Fisher | 0.3219 | 0.3206 | 0.3179 | 0.3156 | 0.3115 | 0.3060 | 0.2956 | — | — |
-| per-head | local | magnitude | 0.3216 | 0.3192 | 0.3159 | 0.3117 | 0.3074 | 0.2985 | 0.2824 | — | — |
-| entire-head | global | Fisher | 0.3242 | 0.3240 | 0.3219 | 0.3201 | 0.3163 | 0.3110 | — | — | — |
-| entire-head | global | magnitude | 0.3244 | 0.3221 | 0.3151 | 0.3085 | 0.2990 | — | — | — | — |
-| entire-head | local | Fisher | 0.3223 | 0.3213 | 0.3199 | 0.3166 | 0.3107 | 0.3019 | 0.2880 | 0.2543 | 0.1809 |
-| entire-head | local | magnitude | 0.3212 | 0.3198 | 0.3178 | 0.3110 | 0.3049 | 0.2906 | 0.2774 | 0.2475 | 0.2057 |
+| Scheme | Threshold | Importance | 10% | 20% | 30% | 40% | 50% | 60% |
+|---|---|---|---|---|---|---|---|---|
+| per-head | global | Fisher | 0.3245 | 0.3235 | 0.3206 | 0.3172 | 0.3123 | 0.3086 |
+| per-head | global | magnitude | 0.3224 | 0.3197 | 0.3148 | 0.3047 | 0.2820 | 0.2590 |
+| per-head | local | Fisher | 0.3219 | 0.3206 | 0.3179 | 0.3156 | 0.3115 | 0.3060 |
+| per-head | local | magnitude | 0.3216 | 0.3192 | 0.3159 | 0.3117 | 0.3074 | 0.2985 |
+| entire-head | global | Fisher | 0.3242 | 0.3240 | 0.3219 | 0.3201 | 0.3163 | 0.3110 |
+| entire-head | global | magnitude | 0.3244 | 0.3221 | 0.3151 | 0.3085 | 0.2990 | — |
+| entire-head | local | Fisher | 0.3223 | 0.3213 | 0.3199 | 0.3166 | 0.3107 | 0.3019 |
+| entire-head | local | magnitude | 0.3212 | 0.3198 | 0.3178 | 0.3110 | 0.3049 | 0.2906 |
+
+### AST — AudioSet, latency (ms/forward, batch=1, dense 20.81 ms)
+
+FLOPs are scheme-invariant at equal sparsity, but latency is not: on AudioSet's
+long input sequence, entire-head pruning removes whole attention maps/softmaxes
+and is consistently faster than per-head (which keeps all heads and only thins
+each one).
+
+| Scheme | Threshold | Importance | 10% | 20% | 30% | 40% | 50% | 60% |
+|---|---|---|---|---|---|---|---|---|
+| per-head | global | Fisher | 20.51 | 19.93 | 19.47 | 19.00 | 18.50 | 17.95 |
+| per-head | global | magnitude | 20.48 | 19.86 | 19.23 | 18.74 | 18.16 | 17.20 |
+| per-head | local | Fisher | 20.72 | 20.05 | 19.23 | 18.95 | 18.20 | 18.01 |
+| per-head | local | magnitude | 20.62 | 19.93 | 19.21 | 18.88 | 18.16 | 17.96 |
+| entire-head | global | Fisher | 20.09 | 19.33 | 18.55 | 17.63 | 16.78 | 15.78 |
+| entire-head | global | magnitude | 20.17 | 19.16 | 18.38 | 17.62 | 16.57 | — |
+| entire-head | local | Fisher | 20.08 | 19.37 | 18.58 | 17.82 | 16.87 | 16.29 |
+| entire-head | local | magnitude | 20.03 | 19.32 | 18.54 | 17.80 | 16.81 | 16.29 |
 
 ### Whisper — avg WER (%) over seen languages vs global attention sparsity
 
