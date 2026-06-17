@@ -113,6 +113,8 @@ Grid cells are linearly interpolated between measured iterations; tables are sho
 
 ### Full per-iteration trajectories
 
+(A `—` below marks a single eval that did not complete at that iteration — rare,
+and confined to collapsed magnitude runs; the comparison grids above are gap-free.)
 
 **per-head · global · Fisher**
 
