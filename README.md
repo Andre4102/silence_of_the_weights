@@ -26,16 +26,12 @@ The experiments sweep three independent axes (see the paper, Sec. 2):
 ## Results (demo)
 
 Tables reproduced with this code. Sparsity is the **fraction of attention-block
-parameters removed**. Cells are interpolated between the 10 pruning iterations;
-`—` means that sparsity was not reached. Tables are shown over the paper's
-sparsity range (≤ ~60%). Full per-language / per-iteration tables:
+parameters removed**. Cells are interpolated between the 10 pruning iterations.
+Tables are shown over the paper's sparsity range (≤ ~60%).
+Full per-language / per-iteration tables:
 [`RESULTS_speechcommands.md`](RESULTS_speechcommands.md),
 [`RESULTS_audioset.md`](RESULTS_audioset.md), and
 [`RESULTS_whisper.md`](RESULTS_whisper.md).
-
-**Takeaways:** Fisher beats magnitude at every comparable point; entire-head is
-the most robust scheme and the only one that also reduces latency (it removes
-whole attention maps rather than thinning each head).
 
 ### AST — SpeechCommands, accuracy (%) vs attention sparsity (dense 98.15%)
 
@@ -52,7 +48,7 @@ whole attention maps rather than thinning each head).
 
 ### AST — AudioSet, mAP vs attention sparsity (dense 0.3226)
 
-Multi-label 527-class; mAP higher is better. Full FLOPs/latency/trajectories in
+Multi-label 527-class; higher mAP is better. Full FLOPs/latency/trajectories in
 [`RESULTS_audioset.md`](RESULTS_audioset.md).
 
 | Scheme | Threshold | Importance | 10% | 20% | 30% | 40% | 50% | 60% |
@@ -71,7 +67,7 @@ Multi-label 527-class; mAP higher is better. Full FLOPs/latency/trajectories in
 FLOPs are scheme-invariant at equal sparsity, but latency is not: on AudioSet's
 long input sequence, entire-head pruning removes whole attention maps/softmaxes
 and is consistently faster than per-head (which keeps all heads and only thins
-each one).
+each one). Per-head still sees latency reduction, although smaller.
 
 | Scheme | Threshold | Importance | 10% | 20% | 30% | 40% | 50% | 60% |
 |---|---|---|---|---|---|---|---|---|
